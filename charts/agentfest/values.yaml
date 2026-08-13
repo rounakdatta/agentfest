@@ -1,0 +1,91 @@
+image:
+  repository: ghcr.io/rounakdatta/agentfest
+  # Pinned to the same tag as Chart.appVersion so a chart upgrade always
+  # corresponds to one specific image. Override at install time if you need
+  # to roll forward without bumping the chart.
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+# One deployment is one computer. Scaling this is meaningless: the whole
+# machine — home directory, tmux sessions, Claude Code state — is a single
+# ReadWriteOnce volume with a single writer.
+replicaCount: 1
+
+# Codeman ships several releases a week, and it is installed into the
+# persistent volume rather than baked into the image. Bumping this value and
+# restarting the pod is the entire upgrade procedure — no image rebuild.
+codeman:
+  version: "1.18.0"
+  port: 3000
+  # Codeman rejects unknown Host headers before any handler runs (it is a
+  # DNS-rebinding guard). Tailscale's .ts.net is allowed out of the box, but a
+  # Traefik ingress on a custom domain is NOT — put that hostname here or every
+  # request comes back as `403 host not allowed`. Comma-separated; a leading
+  # dot matches subdomains.
+  allowedHosts: ""
+
+service:
+  type: ClusterIP
+  port: 3000
+
+persistence:
+  # The computer itself. /home/rounak holds the workspace, ~/.claude session
+  # state, ~/.npm-global (Codeman), git checkouts and build artifacts — so
+  # size this for real work, not for config.
+  enabled: true
+  # local-path is the homelab's only storage class, and it is node-local:
+  # this PVC pins the pod to whichever node first schedules it.
+  storageClass: ""
+  size: 200Gi
+  accessMode: ReadWriteOnce
+  mountPath: /home/rounak
+  # Reuse a pre-existing PVC instead of letting the chart create one.
+  existingClaim: ""
+
+# Codeman launches agents with --dangerously-skip-permissions by default, so
+# whoever reaches the UI controls the machine. This password is a second lock
+# behind Tinyauth, not a substitute for it.
+auth:
+  create: true
+  codemanPassword: ""
+  existingSecret: ""
+
+# Credentials the machine needs to be *itself*, mounted at runtime rather than
+# baked into the image.
+#
+# The SSH key is not optional in practice: dotfiles' claude-skills module
+# clones agent-smith during home-manager activation with no fault tolerance.
+# Without a key that can read that repo, activation fails — the entrypoint
+# deliberately continues so you can still reach a terminal and fix it, but the
+# environment will be incomplete until you do.
+ssh:
+  enabled: false
+  existingSecret: ""
+  # Mounted read-only *here*, not at ~/.ssh, and copied into ~/.ssh by the
+  # entrypoint. ~/.ssh has to stay writable: home-manager's ssh module writes
+  # ~/.ssh/config into it, and known_hosts needs appending.
+  mountPath: /run/secrets/agentfest-ssh
+  defaultMode: 256
+
+securityContext:
+  runAsUser: 1000
+  runAsGroup: 100
+  # Makes the PVC group-writable so the non-root user actually owns its home.
+  fsGroup: 100
+
+resources:
+  requests:
+    cpu: "2"
+    memory: 4Gi
+  limits:
+    memory: 24Gi
+
+# Agents run for hours; never let a slow shutdown truncate a long build.
+terminationGracePeriodSeconds: 60
+
+nodeSelector: {}
+tolerations: []
+
+# Appended verbatim to the container's env. Use for AWS/GCP profile hints,
+# CLAUDE_REAL_BINARY overrides, or anything sourced from another Secret.
+extraEnv: []
