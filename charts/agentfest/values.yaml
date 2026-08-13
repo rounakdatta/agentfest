@@ -3,7 +3,7 @@ image:
   # Pinned to the same tag as Chart.appVersion so a chart upgrade always
   # corresponds to one specific image. Override at install time if you need
   # to roll forward without bumping the chart.
-  tag: "0.1.7"
+  tag: "0.1.8"
   pullPolicy: IfNotPresent
 
 # One deployment is one computer. Scaling this is meaningless: the whole
@@ -17,12 +17,20 @@ replicaCount: 1
 # Claude Code is installed from npm into the persistent volume rather than
 # baked in from nixpkgs. The client version gates which models it can see —
 # nixpkgs' 2.1.86 predates Opus 5 and silently falls back to Opus 4.6 — and a
-# read-only Nix store cannot self-update out of that. Bump here and restart.
+# read-only Nix store cannot self-update out of that.
+#
+# "latest" resolves against the registry on every boot, so the machine tracks
+# upstream by restarting rather than by editing a pin. It still only reinstalls
+# when upstream has actually moved. Set an exact version to freeze it.
 claudeCode:
-  version: "2.1.231"
+  version: "latest"
 
 codeman:
-  version: "1.18.0"
+  # "latest" tracks upstream on restart; an exact version freezes it. Codeman
+  # ships several releases a week, so tracking is usually what you want — but
+  # note a Codeman upgrade recompiles node-pty from source, which is the
+  # slowest part of a boot.
+  version: "latest"
   port: 3000
   # Codeman rejects unknown Host headers before any handler runs (it is a
   # DNS-rebinding guard). Tailscale's .ts.net is allowed out of the box, but a

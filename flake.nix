@@ -47,7 +47,7 @@
       # rather than baked into the image: bumping it is a values.yaml edit and
       # a pod restart, not an image rebuild. It installs into the persistent
       # volume, so it survives restarts and is only fetched when the pin moves.
-      defaultCodemanVersion = "1.18.0";
+      defaultCodemanVersion = "latest";
 
       # Claude Code comes from npm, not nixpkgs, for the same reason the laptop
       # takes it from Homebrew: the client version gates which models it can
@@ -55,7 +55,7 @@
       # entirely and silently falls back to Opus 4.6 — and a read-only Nix store
       # means `claude update` cannot dig itself out. Installed into the
       # persistent volume, so it survives restarts and stays updatable in place.
-      defaultClaudeCodeVersion = "2.1.231";
+      defaultClaudeCodeVersion = "latest";
 
       # dockerTools.fakeNss only knows root and nobody. Codeman, tmux and
       # Claude Code all want a real user with a real home.
@@ -202,36 +202,57 @@
 
           export PATH="$HOME_DIR/.npm-global/bin:$PATH"
 
-          # --- 4. install/refresh Codeman ----------------------------------
-          # The npm package is `aicodeman`; `codeman` on npm is an unrelated
-          # 0.0.1 squat. Keyed on a marker file so a version bump in values.yaml
-          # reinstalls on the next restart and an unchanged pin costs nothing.
+          # --- 4. install/refresh the npm-managed agents -------------------
           export NPM_CONFIG_PREFIX="$HOME_DIR/.npm-global"
           mkdir -p "$NPM_CONFIG_PREFIX"
-          MARKER="$NPM_CONFIG_PREFIX/.agentfest-codeman-version"
 
           # Point node-gyp at the headers already in the image instead of
           # letting it fetch them from nodejs.org — one less network
           # dependency on a boot that is already doing a lot.
           export npm_config_nodedir="${pkgs.nodejs}"
 
-          if [ "$(cat "$MARKER" 2>/dev/null || true)" != "$CODEMAN_VERSION" ]; then
-            log "installing aicodeman@$CODEMAN_VERSION"
-            npm install -g "aicodeman@$CODEMAN_VERSION"
-            printf '%s\n' "$CODEMAN_VERSION" > "$MARKER"
-          else
-            log "aicodeman@$CODEMAN_VERSION already present"
-          fi
+          # Install a package unless the recorded version already matches.
+          #
+          # A spec of "latest" resolves against the registry on every boot, so
+          # the machine tracks upstream by restarting rather than by editing a
+          # pin. The marker still guards the install itself: reinstalling is
+          # not free — aicodeman compiles node-pty from source — so we pay only
+          # when upstream has actually moved.
+          #
+          # A registry lookup failure is deliberately not fatal. Keeping the
+          # version already on the volume is always better than refusing to
+          # boot because npmjs.org was briefly unreachable.
+          ensure_npm_pkg() {
+            pkg="$1"; spec="$2"; marker="$NPM_CONFIG_PREFIX/.agentfest-$3-version"
 
-          # --- 4b. install/refresh Claude Code -----------------------------
-          CLAUDE_MARKER="$NPM_CONFIG_PREFIX/.agentfest-claude-code-version"
-          if [ "$(cat "$CLAUDE_MARKER" 2>/dev/null || true)" != "$CLAUDE_CODE_VERSION" ]; then
-            log "installing @anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
-            npm install -g "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
-            printf '%s\n' "$CLAUDE_CODE_VERSION" > "$CLAUDE_MARKER"
-          else
-            log "claude-code@$CLAUDE_CODE_VERSION already present"
-          fi
+            if [ "$spec" = "latest" ]; then
+              target="$(npm view "$pkg" version 2>/dev/null || true)"
+              if [ -z "$target" ]; then
+                log "WARNING: could not resolve $pkg@latest; keeping $(cat "$marker" 2>/dev/null || echo none)"
+                return 0
+              fi
+              log "$pkg tracks latest -> $target"
+            else
+              target="$spec"
+            fi
+
+            if [ "$(cat "$marker" 2>/dev/null || true)" = "$target" ]; then
+              log "$pkg@$target already present"
+              return 0
+            fi
+
+            log "installing $pkg@$target"
+            if npm install -g "$pkg@$target"; then
+              printf '%s\n' "$target" > "$marker"
+            else
+              log "WARNING: installing $pkg@$target FAILED; leaving previous install in place"
+            fi
+          }
+
+          # The npm package is `aicodeman`; `codeman` on npm is an unrelated
+          # 0.0.1 squat.
+          ensure_npm_pkg aicodeman "$CODEMAN_VERSION" codeman
+          ensure_npm_pkg @anthropic-ai/claude-code "$CLAUDE_CODE_VERSION" claude-code
 
           # --- 5. hand over to Codeman -------------------------------------
           # -H binds beyond loopback, which Codeman refuses to do quietly
