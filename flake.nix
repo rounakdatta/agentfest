@@ -78,10 +78,15 @@
 
           # aicodeman depends on node-pty, which ships no linux-x64 prebuild
           # and falls back to `node-gyp rebuild`. That needs a full C++
-          # toolchain and Python at npm-install time.
+          # toolchain and Python at npm-install time — and gyp's generated
+          # Makefile shells out to sed and awk, which are not in coreutils.
           python3
           gnumake
           gcc
+          binutils
+          gnused
+          gawk
+          findutils
         ];
         text = ''
           HOME_DIR="''${HOME:-${homeDir}}"
@@ -141,13 +146,24 @@
           fi
 
           # --- 3. pick up the activated session environment ----------------
-          HM_VARS="$HOME_DIR/.nix-profile/etc/profile.d/hm-session-vars.sh"
-          if [ -f "$HM_VARS" ]; then
-            # shellcheck disable=SC1090
-            . "$HM_VARS"
-          fi
+          # Standalone home-manager puts the profile under
+          # $XDG_STATE_HOME/nix/profiles, and ~/.nix-profile is the legacy
+          # location that may not exist at all. Looking only at the latter is
+          # how the whole festie toolchain silently failed to reach PATH.
+          for prof in \
+            "$HOME_DIR/.local/state/nix/profiles/home-manager/home-path" \
+            "$HOME_DIR/.nix-profile"
+          do
+            if [ -d "$prof/bin" ]; then
+              export PATH="$prof/bin:$PATH"
+            fi
+            if [ -f "$prof/etc/profile.d/hm-session-vars.sh" ]; then
+              # shellcheck disable=SC1090,SC1091
+              . "$prof/etc/profile.d/hm-session-vars.sh"
+            fi
+          done
 
-          export PATH="$HOME_DIR/.npm-global/bin:$HOME_DIR/.nix-profile/bin:$PATH"
+          export PATH="$HOME_DIR/.npm-global/bin:$PATH"
 
           # --- 4. install/refresh Codeman ----------------------------------
           # The npm package is `aicodeman`; `codeman` on npm is an unrelated
@@ -197,7 +213,11 @@
           pkgs.dockerTools.usrBinEnv
           pkgs.dockerTools.caCertificates
         ];
-        pathsToLink = [ "/bin" "/etc" "/share" "/lib" ];
+        # "/usr" is not decorative: dockerTools.usrBinEnv installs to
+        # $out/usr/bin/env, so omitting it silently drops /usr/bin/env and
+        # every `#!/usr/bin/env` script in the image fails with
+        # "bad interpreter" — which is exactly how doom-emacs' installer died.
+        pathsToLink = [ "/bin" "/usr" "/etc" "/share" "/lib" ];
       };
     in
     {
