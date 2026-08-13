@@ -68,6 +68,20 @@
           nodejs
           gnugrep
           openssh
+
+          # Floor for things the entrypoint needs before — or without — a
+          # successful activation. git is used by claude-skills' clone during
+          # activation itself, and tmux is what Codeman drives; relying on
+          # ~/.nix-profile for either means one failure cascades into three.
+          git
+          tmux
+
+          # aicodeman depends on node-pty, which ships no linux-x64 prebuild
+          # and falls back to `node-gyp rebuild`. That needs a full C++
+          # toolchain and Python at npm-install time.
+          python3
+          gnumake
+          gcc
         ];
         text = ''
           HOME_DIR="''${HOME:-${homeDir}}"
@@ -142,6 +156,11 @@
           export NPM_CONFIG_PREFIX="$HOME_DIR/.npm-global"
           mkdir -p "$NPM_CONFIG_PREFIX"
           MARKER="$NPM_CONFIG_PREFIX/.agentfest-codeman-version"
+
+          # Point node-gyp at the headers already in the image instead of
+          # letting it fetch them from nodejs.org — one less network
+          # dependency on a boot that is already doing a lot.
+          export npm_config_nodedir="${pkgs.nodejs}"
 
           if [ "$(cat "$MARKER" 2>/dev/null || true)" != "$CODEMAN_VERSION" ]; then
             log "installing aicodeman@$CODEMAN_VERSION"
@@ -223,6 +242,21 @@
             mkdir -p tmp
             chmod 1777 tmp
             mkdir -p home/${user}
+          '';
+
+          # The Nix database that includeNixDB bakes in is written as root,
+          # but the container runs as ${toString uid}. home-manager's activate
+          # shells out to nix-env, which takes a write lock on the DB, so
+          # without this it dies on `opening lock file
+          # '/nix/var/nix/db/big-lock': Permission denied` and no dotfiles
+          # ever reach the home directory.
+          #
+          # fakeRootCommands rather than extraCommands: only the former runs
+          # under fakeroot, where chown is actually recorded into the layer.
+          fakeRootCommands = ''
+            mkdir -p nix/var/nix home/${user}
+            chown -R ${toString uid}:${toString gid} nix/var
+            chown ${toString uid}:${toString gid} home/${user}
           '';
         };
       };
