@@ -27,6 +27,12 @@
       gid = 100; # "users", home-manager's default primary group
       homeDir = "/home/${user}";
 
+      # Where standalone home-manager actually puts the profile. ~/.nix-profile
+      # is the legacy location and does not exist here, so anything that hard
+      # codes it finds an empty PATH.
+      hmProfileBin = "${homeDir}/.local/state/nix/profiles/home-manager/home-path/bin";
+      basePath = "${homeDir}/.npm-global/bin:${hmProfileBin}:${homeDir}/.nix-profile/bin:/bin:/usr/bin";
+
       # The whole point of the exercise: the image's environment IS the
       # laptop's environment, evaluated for Linux.
       homeActivation = dotfiles.homeConfigurations.festie.activationPackage;
@@ -56,6 +62,16 @@
 
         cat > "$out/etc/nsswitch.conf" <<EOF
         hosts: files dns
+        EOF
+
+        # A login shell (`bash -lc`, `su -`, and anything that shells out via
+        # `\$SHELL -lc`) ignores the image's Env and rebuilds PATH from
+        # scratch. Without this file that PATH contains none of the profile,
+        # so `node`, `git` and friends vanish — which is exactly how
+        # claude-mem's hooks fail: they do
+        # `export PATH="\$(\$SHELL -lc 'echo \$PATH')"` and get nothing back.
+        cat > "$out/etc/profile" <<EOF
+        export PATH="${basePath}:\$PATH"
         EOF
       '';
 
@@ -254,7 +270,8 @@
             Env = [
               "HOME=${homeDir}"
               "USER=${user}"
-              "PATH=${homeDir}/.npm-global/bin:${homeDir}/.nix-profile/bin:/bin:/usr/bin"
+              "PATH=${basePath}"
+              "SHELL=${pkgs.bashInteractive}/bin/bash"
               "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
               "NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
               "AGENTFEST_HOME_ACTIVATION=${homeActivation}"
