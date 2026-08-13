@@ -5,11 +5,7 @@
     # festie — the definition of what the machine *is* — lives in dotfiles.
     # agentfest only packages and deploys it, so vim/tmux/fish/git/claude
     # settings are never duplicated here.
-    #
-    # TODO: switch to plain `github:rounakdatta/dotfiles` once dotfiles#80
-    # (which adds hosts/festie) merges to main. Until then this has to track
-    # the branch, because homeConfigurations.festie does not exist on main yet.
-    dotfiles.url = "github:rounakdatta/dotfiles/festie-host";
+    dotfiles.url = "github:rounakdatta/dotfiles";
 
     # Deliberately follow dotfiles' pin rather than declaring our own: the
     # container and the laptop must never drift onto different nixpkgs.

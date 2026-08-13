@@ -46,16 +46,15 @@
         "nixpkgs": "nixpkgs_5"
       },
       "locked": {
-        "lastModified": 1786647264,
+        "lastModified": 1786648766,
         "narHash": "sha256-4zfVKRMHQ4CJXSM7XM2oiVikCcbPQNmzXGL24czAycs=",
         "owner": "rounakdatta",
         "repo": "dotfiles",
-        "rev": "40577dbcb69e12fdf358e8f00e768ec90305cae1",
+        "rev": "059207ba67d895641c3f945db362ba17afc0d7b8",
         "type": "github"
       },
       "original": {
         "owner": "rounakdatta",
-        "ref": "festie-host",
         "repo": "dotfiles",
         "type": "github"
       }
