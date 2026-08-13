@@ -57,6 +57,28 @@
       # persistent volume, so it survives restarts and stays updatable in place.
       defaultClaudeCodeVersion = "latest";
 
+      # Claude Code's npm package ships a prebuilt native binary (claude.exe)
+      # whose ELF interpreter is the FHS path /lib64/ld-linux-x86-64.so.2. A
+      # Nix-built image has no /lib64 at all, so exec fails with the famously
+      # unhelpful "cannot execute: required file not found" — the *interpreter*
+      # is missing, not the binary. Providing the loader (and the handful of
+      # libraries such binaries expect to find on a default search path) is
+      # what makes any non-Nix prebuilt executable runnable here.
+      #
+      # Deliberately not LD_LIBRARY_PATH: that would leak into Nix binaries
+      # which already carry absolute RPATHs, and is a well-known way to break
+      # them. Populating /lib64 only affects binaries that go looking there.
+      fhsLoader = pkgs.runCommand "agentfest-fhs-loader" { } ''
+        mkdir -p "$out/lib64"
+        ln -s ${pkgs.glibc}/lib/ld-linux-x86-64.so.2 "$out/lib64/ld-linux-x86-64.so.2"
+        for lib in ${pkgs.glibc}/lib/lib*.so*; do
+          ln -sf "$lib" "$out/lib64/$(basename "$lib")" 2>/dev/null || true
+        done
+        for lib in ${pkgs.stdenv.cc.cc.lib}/lib/lib*.so*; do
+          ln -sf "$lib" "$out/lib64/$(basename "$lib")" 2>/dev/null || true
+        done
+      '';
+
       # dockerTools.fakeNss only knows root and nobody. Codeman, tmux and
       # Claude Code all want a real user with a real home.
       nssFiles = pkgs.runCommand "agentfest-nss" { } ''
@@ -273,6 +295,7 @@
         paths = [
           entrypoint
           nssFiles
+          fhsLoader
           pkgs.bashInteractive
           pkgs.coreutils
           pkgs.nix
@@ -285,7 +308,7 @@
         # $out/usr/bin/env, so omitting it silently drops /usr/bin/env and
         # every `#!/usr/bin/env` script in the image fails with
         # "bad interpreter" — which is exactly how doom-emacs' installer died.
-        pathsToLink = [ "/bin" "/usr" "/etc" "/share" "/lib" ];
+        pathsToLink = [ "/bin" "/usr" "/etc" "/share" "/lib" "/lib64" ];
       };
     in
     {
