@@ -271,7 +271,14 @@
               "HOME=${homeDir}"
               "USER=${user}"
               "PATH=${basePath}"
-              "SHELL=${pkgs.bashInteractive}/bin/bash"
+
+              # Codeman resolves a pane's shell as $SHELL -> passwd -> /bin/bash,
+              # and only accepts a candidate that exists and is executable — so
+              # naming fish here yields fish when activation has populated the
+              # profile, and falls back to the passwd entry's bash when it has
+              # not. fish is on Codeman's own login-flag allowlist, so it still
+              # gets spawned as `-i -l` and reads /etc/profile like the rest.
+              "SHELL=${hmProfileBin}/fish"
               "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
               "NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
               "AGENTFEST_HOME_ACTIVATION=${homeActivation}"
