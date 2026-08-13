@@ -158,8 +158,14 @@
               export PATH="$prof/bin:$PATH"
             fi
             if [ -f "$prof/etc/profile.d/hm-session-vars.sh" ]; then
+              # hm-session-vars.sh probes $__HM_SESS_VARS_SOURCED before
+              # setting it, which is fatal under writeShellApplication's
+              # `set -u`. Drop nounset just for the source — the alternative
+              # is the entrypoint dying here and Codeman never starting.
+              set +u
               # shellcheck disable=SC1090,SC1091
               . "$prof/etc/profile.d/hm-session-vars.sh"
+              set -u
             fi
           done
 
