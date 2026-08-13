@@ -28,6 +28,8 @@ spec:
           env:
             - name: AGENTFEST_CODEMAN_VERSION
               value: {{ .Values.codeman.version | quote }}
+            - name: AGENTFEST_CLAUDE_CODE_VERSION
+              value: {{ .Values.claudeCode.version | quote }}
             - name: CODEMAN_PORT
               value: {{ .Values.codeman.port | quote }}
             - name: CODEMAN_BIND_HOST

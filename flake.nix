@@ -31,7 +31,13 @@
       # is the legacy location and does not exist here, so anything that hard
       # codes it finds an empty PATH.
       hmProfileBin = "${homeDir}/.local/state/nix/profiles/home-manager/home-path/bin";
-      basePath = "${homeDir}/.npm-global/bin:${hmProfileBin}:${homeDir}/.nix-profile/bin:/bin:/usr/bin";
+      npmBin = "${homeDir}/.npm-global/bin";
+
+      # The profile deliberately precedes the npm prefix: dotfiles' `claude` is
+      # a wrapper that layers hierarchical skills on, and the npm package
+      # installs a bin of the same name. The wrapper has to win the PATH lookup
+      # and reach the real binary through CLAUDE_REAL_BINARY instead.
+      basePath = "${hmProfileBin}:${npmBin}:${homeDir}/.nix-profile/bin:/bin:/usr/bin";
 
       # The whole point of the exercise: the image's environment IS the
       # laptop's environment, evaluated for Linux.
@@ -42,6 +48,14 @@
       # a pod restart, not an image rebuild. It installs into the persistent
       # volume, so it survives restarts and is only fetched when the pin moves.
       defaultCodemanVersion = "1.18.0";
+
+      # Claude Code comes from npm, not nixpkgs, for the same reason the laptop
+      # takes it from Homebrew: the client version gates which models it can
+      # see. nixpkgs pinned at 2026-03-28 carries 2.1.86, which predates Opus 5
+      # entirely and silently falls back to Opus 4.6 — and a read-only Nix store
+      # means `claude update` cannot dig itself out. Installed into the
+      # persistent volume, so it survives restarts and stays updatable in place.
+      defaultClaudeCodeVersion = "2.1.231";
 
       # dockerTools.fakeNss only knows root and nobody. Codeman, tmux and
       # Claude Code all want a real user with a real home.
@@ -107,6 +121,7 @@
         text = ''
           HOME_DIR="''${HOME:-${homeDir}}"
           CODEMAN_VERSION="''${AGENTFEST_CODEMAN_VERSION:-${defaultCodemanVersion}}"
+          CLAUDE_CODE_VERSION="''${AGENTFEST_CLAUDE_CODE_VERSION:-${defaultClaudeCodeVersion}}"
           ACTIVATION="''${AGENTFEST_HOME_ACTIVATION:-${homeActivation}}"
 
           log() { printf '[agentfest] %s\n' "$*"; }
@@ -208,6 +223,16 @@
             log "aicodeman@$CODEMAN_VERSION already present"
           fi
 
+          # --- 4b. install/refresh Claude Code -----------------------------
+          CLAUDE_MARKER="$NPM_CONFIG_PREFIX/.agentfest-claude-code-version"
+          if [ "$(cat "$CLAUDE_MARKER" 2>/dev/null || true)" != "$CLAUDE_CODE_VERSION" ]; then
+            log "installing @anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
+            npm install -g "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
+            printf '%s\n' "$CLAUDE_CODE_VERSION" > "$CLAUDE_MARKER"
+          else
+            log "claude-code@$CLAUDE_CODE_VERSION already present"
+          fi
+
           # --- 5. hand over to Codeman -------------------------------------
           # -H binds beyond loopback, which Codeman refuses to do quietly
           # without CODEMAN_PASSWORD. Tinyauth sits in front of it as well.
@@ -283,6 +308,11 @@
               "NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
               "AGENTFEST_HOME_ACTIVATION=${homeActivation}"
               "AGENTFEST_CODEMAN_VERSION=${defaultCodemanVersion}"
+              "AGENTFEST_CLAUDE_CODE_VERSION=${defaultClaudeCodeVersion}"
+              # dotfiles' claude wrapper resolves the real binary through this.
+              # Points at the npm install rather than the nixpkgs one so the
+              # client is current enough to know Opus 5 exists.
+              "CLAUDE_REAL_BINARY=${npmBin}/claude"
               "LANG=C.UTF-8"
               "TERM=xterm-256color"
             ];

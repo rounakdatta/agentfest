@@ -3,7 +3,7 @@ image:
   # Pinned to the same tag as Chart.appVersion so a chart upgrade always
   # corresponds to one specific image. Override at install time if you need
   # to roll forward without bumping the chart.
-  tag: "0.1.6"
+  tag: "0.1.7"
   pullPolicy: IfNotPresent
 
 # One deployment is one computer. Scaling this is meaningless: the whole
@@ -14,6 +14,13 @@ replicaCount: 1
 # Codeman ships several releases a week, and it is installed into the
 # persistent volume rather than baked into the image. Bumping this value and
 # restarting the pod is the entire upgrade procedure — no image rebuild.
+# Claude Code is installed from npm into the persistent volume rather than
+# baked in from nixpkgs. The client version gates which models it can see —
+# nixpkgs' 2.1.86 predates Opus 5 and silently falls back to Opus 4.6 — and a
+# read-only Nix store cannot self-update out of that. Bump here and restart.
+claudeCode:
+  version: "2.1.231"
+
 codeman:
   version: "1.18.0"
   port: 3000
