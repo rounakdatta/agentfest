@@ -594,6 +594,28 @@
           extraCommands = ''
             mkdir -p tmp
             chmod 1777 tmp
+
+            # /var/tmp, 1777 like /tmp above. FHS-standard and generally
+            # expected, but the concrete forcing function is Homebrew: on a
+            # Landlock-capable kernel (this one reports ABI 6) every
+            # `brew install` runs the build in its sandbox, and
+            # Sandbox::LinuxBackend#prepare_writable_path mkdir_p's the
+            # sandbox's writable paths — /tmp, several /dev entries, and
+            # /var/tmp. Every one of those exists in a container except
+            # /var/tmp, and /var is root-owned so an unprivileged brew cannot
+            # create it, giving:
+            #
+            #   Error: Permission denied @ dir_s_mkdir - /var/tmp
+            #
+            # It fails after the download and formula resolution, so it looks
+            # like a formula problem rather than a missing directory. There is
+            # no env-var escape — HOMEBREW_TEMP and
+            # HOMEBREW_AVOID_NESTED_SANDBOXING both leave the path preparation
+            # in place. It also broke binutils' post-install step for the same
+            # reason.
+            mkdir -p var/tmp
+            chmod 1777 var/tmp
+
             mkdir -p home/${user}
           '';
 
