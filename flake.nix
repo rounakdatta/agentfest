@@ -288,6 +288,18 @@
 
           export PATH="$HOME_DIR/.npm-global/bin:$PATH"
 
+          # home-manager runs importGpgKey — which auto-starts gpg-agent —
+          # before linkGeneration writes ~/.gnupg/gpg-agent.conf. The agent
+          # therefore comes up with default settings, no pinentry-program, and
+          # never reloads config, so every decryption for the life of the pod
+          # fails with "No pinentry" even though the conf and the binary are
+          # both correct. Killing it here means the next gpg call starts an
+          # agent that has actually read the file.
+          if command -v gpgconf >/dev/null 2>&1; then
+            gpgconf --kill gpg-agent >/dev/null 2>&1 || true
+            log "restarted gpg-agent so it picks up pinentry-curses"
+          fi
+
           # --- 4. install/refresh the npm-managed agents -------------------
           export NPM_CONFIG_PREFIX="$HOME_DIR/.npm-global"
           mkdir -p "$NPM_CONFIG_PREFIX"
