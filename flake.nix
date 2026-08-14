@@ -422,6 +422,15 @@
             mkdir -p nix/var/nix home/${user}
             chown -R ${toString uid}:${toString gid} nix/var
             chown ${toString uid}:${toString gid} home/${user}
+
+            # installPackages runs `nix-env -i`, which takes a lock by creating
+            # <manifest>.lock *inside* /nix/store — so it needs write
+            # permission on the store directory itself, not on its contents.
+            # Deliberately not recursive: chowning the whole store would rewrite
+            # ownership metadata for every path in a multi-gigabyte closure and
+            # balloon the layer, to fix a problem that is only about creating
+            # one file in one directory.
+            chown ${toString uid}:${toString gid} nix/store
           '';
         };
       };
