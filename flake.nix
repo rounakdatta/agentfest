@@ -33,11 +33,28 @@
       hmProfileBin = "${homeDir}/.local/state/nix/profiles/home-manager/home-path/bin";
       npmBin = "${homeDir}/.npm-global/bin";
 
-      # The profile deliberately precedes the npm prefix: dotfiles' `claude` is
-      # a wrapper that layers hierarchical skills on, and the npm package
-      # installs a bin of the same name. The wrapper has to win the PATH lookup
-      # and reach the real binary through CLAUDE_REAL_BINARY instead.
-      basePath = "${hmProfileBin}:${npmBin}:${homeDir}/.nix-profile/bin:/bin:/usr/bin";
+      # Where dotfiles' activation drops release binaries it fetches itself —
+      # currently just mic (configs/mic). Named here rather than left to
+      # home.sessionPath alone because sessionPath only reaches shells that
+      # source hm-session-vars.sh; an MCP server spawned by Claude Code may not
+      # be one, and `command = "mic"` has to resolve there too.
+      localBin = "${homeDir}/.local/bin";
+
+      # Homebrew, in an unsupported prefix on purpose — see the bootstrap step
+      # in the entrypoint.
+      brewPrefix = "${homeDir}/.homebrew";
+      brewBin = "${brewPrefix}/bin";
+
+      # localBin leads so a mic fetched by dotfiles wins over one installed by
+      # brew: it needs nothing but gh, where brew's copy depends on a whole
+      # package manager having bootstrapped correctly. The brew copy stays
+      # reachable at its absolute path for deliberate testing.
+      #
+      # The home-manager profile deliberately precedes the npm prefix: dotfiles'
+      # `claude` is a wrapper that layers hierarchical skills on, and the npm
+      # package installs a bin of the same name. The wrapper has to win the PATH
+      # lookup and reach the real binary through CLAUDE_REAL_BINARY instead.
+      basePath = "${localBin}:${hmProfileBin}:${npmBin}:${homeDir}/.nix-profile/bin:${brewBin}:/bin:/usr/bin";
 
       # The whole point of the exercise: the image's environment IS the
       # laptop's environment, evaluated for Linux.
@@ -77,6 +94,36 @@
         for lib in ${pkgs.stdenv.cc.cc.lib}/lib/lib*.so*; do
           ln -sf "$lib" "$out/lib64/$(basename "$lib")" 2>/dev/null || true
         done
+
+        # A minimal FHS /usr/bin, for the same class of reason as /lib64 above:
+        # programs that look for a fixed absolute path rather than searching
+        # PATH. Adding these to /bin does nothing — the lookups are literal.
+        #
+        # Homebrew needs all of them, and each failure is fatal and opaque:
+        #
+        #   ldd  — vendor-install runs `/usr/bin/ldd --version` to check the
+        #          system glibc is >= 2.13 before fetching Portable Ruby, and
+        #          odie()s if it can't parse the output. Without it: "Failed to
+        #          detect system Glibc version" and brew never runs at all.
+        #
+        #   cc / gcc / ld / as — DevelopmentTools.locate on Linux
+        #          (extend/os/linux/development_tools.rb) tries
+        #          HOMEBREW_PREFIX/opt/{binutils,glibc}/bin, then
+        #          HOMEBREW_PREFIX/bin, then /usr/bin/<tool>. PATH is never
+        #          consulted, so a compiler in /bin is invisible and every
+        #          `brew install` — even one that compiles nothing — stops at
+        #          "No developer tools installed".
+        #
+        # gcc and binutils are already in this image's closure (the entrypoint's
+        # runtimeInputs pull them in for node-gyp), so these cost symlinks.
+        mkdir -p "$out/usr/bin"
+        ln -s ${pkgs.glibc.bin}/bin/ldd "$out/usr/bin/ldd"
+        for tool in gcc cc; do
+          ln -sf ${pkgs.gcc}/bin/$tool "$out/usr/bin/$tool"
+        done
+        for tool in ld as; do
+          ln -sf ${pkgs.binutils}/bin/$tool "$out/usr/bin/$tool"
+        done
       '';
 
       # dockerTools.fakeNss only knows root and nobody. Codeman, tmux and
@@ -98,6 +145,18 @@
 
         cat > "$out/etc/nsswitch.conf" <<EOF
         hosts: files dns
+        EOF
+
+        # Cosmetic but worth having. Homebrew sources /etc/os-release purely to
+        # read PRETTY_NAME into its version string and user agent, falling back
+        # to `uname -r`; without the file every brew invocation prints two
+        # "No such file or directory" lines from bash before doing anything.
+        # A Nix-built image has no distro to describe, so this says so.
+        cat > "$out/etc/os-release" <<EOF
+        NAME="agentfest"
+        ID=agentfest
+        PRETTY_NAME="agentfest (Nix-built container)"
+        HOME_URL="https://github.com/rounakdatta/agentfest"
         EOF
 
         # A login shell (`bash -lc`, `su -`, and anything that shells out via
@@ -352,6 +411,42 @@
           ensure_npm_pkg aicodeman "$CODEMAN_VERSION" codeman
           ensure_npm_pkg @anthropic-ai/claude-code "$CLAUDE_CODE_VERSION" claude-code
 
+          # --- 4b. Homebrew -------------------------------------------------
+          # Installed into the persistent volume rather than baked into the
+          # image, for the same reason as Codeman and Claude Code: it is a
+          # self-updating thing that would otherwise be frozen at image-build
+          # time, and a read-only Nix store cannot host a package manager that
+          # writes to its own prefix.
+          #
+          # ~/.homebrew is an *unsupported* prefix on Linux — Homebrew only
+          # blesses /home/linuxbrew/.linuxbrew — which means no bottles: every
+          # formula would build from source. That is a deliberate trade. The
+          # supported prefix lives outside $HOME, so it would sit in the image
+          # layer and be discarded on every pod restart, re-downloading brew
+          # each boot. And it cannot be created at runtime anyway: /home is
+          # root-owned and this container runs as ${toString uid}.
+          #
+          # Nothing here needs bottles today. mic's formula has no dependencies
+          # and its install is "download a tarball, drop one static binary in
+          # bin" — zero compilation. Reconsider if that stops being true.
+          BREW_PREFIX="$HOME_DIR/.homebrew"
+          if [ ! -x "$BREW_PREFIX/bin/brew" ]; then
+            log "installing Homebrew into $BREW_PREFIX (first boot only)"
+            # A full clone, not --depth=1: brew reports "shallow or no git
+            # repository" on a shallow one and refuses to update itself.
+            if git clone --quiet https://github.com/Homebrew/brew "$BREW_PREFIX"; then
+              log "Homebrew installed"
+            else
+              log "WARNING: Homebrew clone failed — brew will be unavailable."
+              log "WARNING: nothing else depends on it; mic comes from dotfiles."
+            fi
+          fi
+          if [ -x "$BREW_PREFIX/bin/brew" ]; then
+            # Appended, not prepended: dotfiles installs mic into
+            # ~/.local/bin and that copy should win (see basePath).
+            export PATH="$PATH:$BREW_PREFIX/bin"
+          fi
+
           # --- 5. hand over to Codeman -------------------------------------
           # -H binds beyond loopback, which Codeman refuses to do quietly
           # without CODEMAN_PASSWORD. Tinyauth sits in front of it as well.
@@ -379,6 +474,47 @@
           pkgs.dockerTools.binSh
           pkgs.dockerTools.usrBinEnv
           pkgs.dockerTools.caCertificates
+
+          # An FHS-shaped /bin, for tools that assume one. Homebrew is the
+          # reason this exists: bin/brew hardcodes
+          # PATH="/usr/bin:/bin:/usr/sbin:/sbin" unconditionally, discarding
+          # whatever we set, so nothing in a Nix profile is visible to it. On
+          # this image that left it with /usr/bin containing exactly `env` and
+          # /bin holding coreutils, bash and nix — no grep. Its CPU-feature
+          # probe greps /proc/cpuinfo, so the failure surfaced as the
+          # spectacularly misleading:
+          #
+          #   Error: Homebrew's x86_64 support on Linux requires a CPU with
+          #          SSSE3 support!
+          #
+          # on a CPU that has SSSE3. Same class of problem as fhsLoader above,
+          # and the same kind of fix: put the expected things where a non-Nix
+          # program looks, rather than trying to teach it about Nix.
+          #
+          # gh earns its place for a specific reason: mic's Homebrew formula
+          # downloads through gh (the repo is private), and the download
+          # strategy resolves it off PATH — brew's sanitized PATH. Without gh
+          # in /bin, `brew install mic` fails with "gh CLI not found" while gh
+          # sits in the home-manager profile.
+          #
+          # Cheap in practice: git and gh are already in this image's closure
+          # (the entrypoint and festie's home profile pull them in), so these
+          # are mostly symlinks rather than new store paths.
+          pkgs.gnugrep
+          pkgs.gnused
+          pkgs.gawk
+          pkgs.curl
+          pkgs.gnutar
+          pkgs.gzip
+          pkgs.git
+          pkgs.gh
+          # openssh is not optional for the tap. The lyric-tech/mic tap is a
+          # private repo, and the only credential this container has for it is
+          # the mounted SSH key — there is no git credential helper here — so
+          # the tap uses the git@github.com clone target, exactly as the laptop
+          # does. git then forks `ssh`, off the sanitized PATH, and without it
+          # `brew tap` dies on "cannot run ssh: No such file or directory".
+          pkgs.openssh
         ];
         # "/usr" is not decorative: dockerTools.usrBinEnv installs to
         # $out/usr/bin/env, so omitting it silently drops /usr/bin/env and
@@ -435,6 +571,23 @@
               "CLAUDE_REAL_BINARY=${npmBin}/claude"
               "LANG=C.UTF-8"
               "TERM=xterm-256color"
+
+              # Homebrew, for the prefix bootstrapped into the volume at boot.
+              # NO_AUTO_UPDATE matters most: without it every `brew` invocation
+              # fetches upstream first, which on a cold container turns a
+              # one-second install into minutes. NO_ENV_HINTS silences the
+              # "add brew shellenv to your profile" nag, already handled via
+              # basePath.
+              #
+              # Deliberately NOT setting HOMEBREW_PREFIX: brew derives it from
+              # the path of its own executable (bin/brew, near the top) and
+              # overwrites whatever we pass, so declaring it here would read as
+              # authoritative while being ignored. LANG and LC_ALL are likewise
+              # on brew's own sanitize list, which is why it still warns about
+              # en_US.UTF-8 no matter what the image sets.
+              "HOMEBREW_NO_ANALYTICS=1"
+              "HOMEBREW_NO_AUTO_UPDATE=1"
+              "HOMEBREW_NO_ENV_HINTS=1"
             ];
           };
 
