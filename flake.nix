@@ -172,6 +172,18 @@
             if [ -f "$SSH_SOURCE/personal.pem" ]; then
               install -m 600 "$SSH_SOURCE/personal.pem" "$HOME_DIR/.ssh/keys/personal.pem"
               log "installed ssh key at ~/.ssh/keys/personal.pem"
+
+              # Also as a default identity, which fixes a first-boot-only
+              # ordering trap: home-manager runs passwordStore (which fetches
+              # the store from gitlab over ssh) BEFORE linkGeneration writes
+              # ~/.ssh/config. On a fresh volume there is therefore no
+              # IdentityFile directive yet, ssh falls back to default identity
+              # paths, finds nothing, and the fetch fails — leaving an empty
+              # password store and, downstream, no gopass and no GitHub PAT.
+              # It self-heals on the second boot once the config persists,
+              # which is exactly the kind of "works on restart" mystery worth
+              # not shipping.
+              install -m 600 "$SSH_SOURCE/personal.pem" "$HOME_DIR/.ssh/id_rsa"
             else
               log "no personal.pem — git over ssh and the agent-smith clone will fail"
             fi
@@ -181,6 +193,10 @@
             if [ -f "$SSH_SOURCE/private.key" ]; then
               install -m 600 "$SSH_SOURCE/private.key" "$HOME_DIR/.secrets/private.key"
               log "installed gpg key at ~/.secrets/private.key"
+              # gpg refuses to be quiet about a group- or world-readable
+              # homedir, and the PVC's fsGroup makes it exactly that.
+              mkdir -p "$HOME_DIR/.gnupg"
+              chmod 700 "$HOME_DIR/.gnupg"
             else
               log "no private.key — gpg keyring stays empty, so pass cannot decrypt"
             fi
