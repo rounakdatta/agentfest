@@ -199,15 +199,22 @@
 
           # Without this, a non-interactive `git clone git@github.com:...`
           # dies on host-key verification rather than prompting.
-          if [ ! -s "$HOME_DIR/.ssh/known_hosts" ] || \
-             ! grep -q 'github\.com' "$HOME_DIR/.ssh/known_hosts" 2>/dev/null; then
-            log "seeding known_hosts for github.com"
-            mkdir -p "$HOME_DIR/.ssh"
-            chmod 700 "$HOME_DIR/.ssh"
-            ssh-keyscan -t rsa,ecdsa,ed25519 github.com \
-              >> "$HOME_DIR/.ssh/known_hosts" 2>/dev/null || \
-              log "WARNING: ssh-keyscan failed; github.com may be unreachable"
-          fi
+          #
+          # gitlab.com matters as much as github.com here: configs/ssh names
+          # both, and configs/pass syncs the password store from gitlab — which
+          # in turn gates gopass, and therefore the GitHub PAT that
+          # createTokenIncludedGitHubHttpsConfig writes for https remotes.
+          # Omitting it breaks that whole chain at the first link.
+          mkdir -p "$HOME_DIR/.ssh"
+          chmod 700 "$HOME_DIR/.ssh"
+          for host in github.com gitlab.com; do
+            if ! grep -q "^$host " "$HOME_DIR/.ssh/known_hosts" 2>/dev/null; then
+              log "seeding known_hosts for $host"
+              ssh-keyscan -t rsa,ecdsa,ed25519 "$host" \
+                >> "$HOME_DIR/.ssh/known_hosts" 2>/dev/null || \
+                log "WARNING: ssh-keyscan failed for $host"
+            fi
+          done
 
           # --- 2. activate the festie home profile ------------------------
           # On a fresh volume this populates an empty /home/rounak; on every
