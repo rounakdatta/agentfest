@@ -190,6 +190,21 @@
           log "activating festie home profile"
           mkdir -p "$HOME_DIR/.local/state/nix/profiles"
 
+          # home-manager refuses to overwrite a file it does not own, and
+          # several things here rewrite their own config at runtime: Claude
+          # Code rewrites ~/.claude/settings.json when it installs plugins, and
+          # `doom install` rewrites ~/.doom.d/*. Each of those replaces an HM
+          # symlink with a real file, after which checkLinkTargets — the second
+          # activation step — aborts the whole run before anything is applied.
+          # The machine then silently stops converging: no skills sync, no
+          # pass setup, no new packages, on every subsequent boot.
+          #
+          # Backing up rather than deleting keeps one generation of whatever
+          # the runtime wrote, which is occasionally worth reading. The stale
+          # backup has to go first, because HM equally refuses to clobber that.
+          export HOME_MANAGER_BACKUP_EXT="hm-backup"
+          find "$HOME_DIR" -maxdepth 4 -name '*.hm-backup' -delete 2>/dev/null || true
+
           if ! "$ACTIVATION/activate"; then
             log "WARNING: home-manager activation FAILED."
             log "WARNING: starting Codeman anyway so the terminal stays reachable"
