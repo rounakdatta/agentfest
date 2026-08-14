@@ -1,5 +1,9 @@
 # agentfest
 
+<div align="center">
+  <img src="assets/agentfest_logo.png" alt="agentfest logo" width="480">
+</div>
+
 A persistent remote computer whose primary UI is Claude Code.
 
 The premise: my laptop and phone come and go, but the homelab stays connected.
