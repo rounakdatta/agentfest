@@ -82,6 +82,19 @@ but the environment is incomplete until the key is mounted.
 **`local-path` is node-local.** The PVC pins the pod to whichever node first
 schedules it. That is fine for one computer; it is a real constraint for many.
 
+**Homebrew works here, but it is not how anything gets installed.** brew is
+bootstrapped into `~/.homebrew` on first boot so Lyric's `mic` tap can be
+exercised on Linux. Making it run at all took an FHS-shaped `/bin` plus
+`/usr/bin/{ldd,cc,gcc,ld,as}`, because brew hardcodes
+`PATH=/usr/bin:/bin:/usr/sbin:/sbin` and looks up its toolchain by absolute
+path rather than searching PATH — see the comments in `flake.nix`. Two things
+to know: `~/.homebrew` is an *unsupported* prefix (the supported one lives
+outside `$HOME` and so would not survive a pod restart), which means no
+bottles; and brew therefore wants to install its own glibc, gcc and binutils
+before any formula, even one that compiles nothing. Anything you actually
+depend on should come from `dotfiles`, which is why `mic` is installed from its
+release tarball there and merely *also* available through brew.
+
 **Codeman is pinned by the chart, not the image.** It ships several releases a
 week and installs into the persistent volume, so upgrading is a `values.yaml`
 bump and a pod restart — no image rebuild. Everything else follows the opposite
