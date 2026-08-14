@@ -3,7 +3,7 @@ image:
   # Pinned to the same tag as Chart.appVersion so a chart upgrade always
   # corresponds to one specific image. Override at install time if you need
   # to roll forward without bumping the chart.
-  tag: "0.1.10"
+  tag: "0.1.11"
   pullPolicy: IfNotPresent
 
 # One deployment is one computer. Scaling this is meaningless: the whole
@@ -73,13 +73,24 @@ auth:
 # Without a key that can read that repo, activation fails — the entrypoint
 # deliberately continues so you can still reach a terminal and fix it, but the
 # environment will be incomplete until you do.
+# Credentials the machine needs to be *itself*, mounted at runtime rather than
+# baked into the image. Two keys, both stored in Bitwarden as secure notes
+# because they are multi-line armored blocks:
+#
+#   personal.pem  RSA private key. configs/ssh points github.com and gitlab.com
+#                 at ~/.ssh/keys/personal.pem, so this is what makes git work —
+#                 including claude-skills' agent-smith clone during activation.
+#   private.key   PGP private key. configs/gnupg imports it during activation,
+#                 which is what lets pass/gopass decrypt — and therefore what
+#                 the pass-backed MCP servers depend on.
+#
+# The entrypoint copies both to the paths dotfiles expects; they cannot be
+# mounted there directly because a Secret volume is read-only and both
+# destinations need to stay writable.
 ssh:
   enabled: false
   existingSecret: ""
-  # Mounted read-only *here*, not at ~/.ssh, and copied into ~/.ssh by the
-  # entrypoint. ~/.ssh has to stay writable: home-manager's ssh module writes
-  # ~/.ssh/config into it, and known_hosts needs appending.
-  mountPath: /run/secrets/agentfest-ssh
+  mountPath: /run/secrets/agentfest
   defaultMode: 256
 
 securityContext:

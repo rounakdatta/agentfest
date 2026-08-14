@@ -158,17 +158,43 @@
           # ~/.ssh/config into it and because known_hosts needs appending.
           # This runs before activation because activation is what clones
           # agent-smith over SSH.
-          SSH_SOURCE="''${AGENTFEST_SSH_DIR:-/run/secrets/agentfest-ssh}"
+          # Each secret is copied to the exact path dotfiles already expects,
+          # rather than mounted there: a Secret volume is read-only, and both
+          # destinations sit in directories that have to stay writable —
+          # ~/.ssh for home-manager's ssh config and known_hosts, ~/.gnupg for
+          # the imported keyring.
+          SSH_SOURCE="''${AGENTFEST_SSH_DIR:-/run/secrets/agentfest}"
           if [ -d "$SSH_SOURCE" ]; then
-            log "installing SSH material from $SSH_SOURCE"
-            mkdir -p "$HOME_DIR/.ssh"
-            chmod 700 "$HOME_DIR/.ssh"
+            mkdir -p "$HOME_DIR/.ssh/keys" "$HOME_DIR/.secrets"
+            chmod 700 "$HOME_DIR/.ssh" "$HOME_DIR/.ssh/keys" "$HOME_DIR/.secrets"
+
+            # configs/ssh points github.com and gitlab.com at this exact path.
+            if [ -f "$SSH_SOURCE/personal.pem" ]; then
+              install -m 600 "$SSH_SOURCE/personal.pem" "$HOME_DIR/.ssh/keys/personal.pem"
+              log "installed ssh key at ~/.ssh/keys/personal.pem"
+            else
+              log "no personal.pem — git over ssh and the agent-smith clone will fail"
+            fi
+
+            # configs/gnupg imports this during activation, which is what makes
+            # pass/gopass — and therefore the pass-backed MCP servers — work.
+            if [ -f "$SSH_SOURCE/private.key" ]; then
+              install -m 600 "$SSH_SOURCE/private.key" "$HOME_DIR/.secrets/private.key"
+              log "installed gpg key at ~/.secrets/private.key"
+            else
+              log "no private.key — gpg keyring stays empty, so pass cannot decrypt"
+            fi
+
+            # Anything else in the mount lands in ~/.ssh as-is.
             for key in "$SSH_SOURCE"/*; do
               [ -f "$key" ] || continue
+              case "$(basename "$key")" in
+                personal.pem | private.key) continue ;;
+              esac
               install -m 600 "$key" "$HOME_DIR/.ssh/$(basename "$key")"
             done
           else
-            log "no SSH material at $SSH_SOURCE — the agent-smith clone will fail"
+            log "no secrets mounted at $SSH_SOURCE — ssh, gpg and pass will all be unconfigured"
           fi
 
           # Without this, a non-interactive `git clone git@github.com:...`
