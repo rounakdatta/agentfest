@@ -444,6 +444,20 @@
           if [ -x "$BREW_PREFIX/bin/brew" ]; then
             # Appended, not prepended: dotfiles installs mic into
             # ~/.local/bin and that copy should win (see basePath).
+            # Homebrew 6 refuses to write its tap-trust store when the prefix
+            # is group- or world-writable:
+            #
+            #   Error: Refusing to write insecure trust store: trust store
+            #   directory /home/rounak/.homebrew is group or world writable.
+            #
+            # The PVC's fsGroup makes every directory under $HOME exactly that,
+            # so a freshly cloned prefix is always 0775 and every `brew install`
+            # of a third-party tap fails. Same root cause as the ~/.gnupg chmod
+            # earlier in this script, and the same fix. Run on every boot rather
+            # than only after the clone, because the mode is a property of the
+            # volume, not of the clone.
+            chmod g-w,o-w "$BREW_PREFIX" || true
+
             export PATH="$PATH:$BREW_PREFIX/bin"
           fi
 
