@@ -42,11 +42,24 @@ spec:
             - name: CODEMAN_ALLOWED_HOSTS
               value: {{ .Values.codeman.allowedHosts | quote }}
             {{- end }}
+            {{- if .Values.auth.enabled }}
             - name: CODEMAN_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.auth.existingSecret | default (printf "%s-auth" .Release.Name) }}
                   key: codeman-password
+            {{- else }}
+            {{/*
+              With no CODEMAN_PASSWORD, Codeman's auth middleware returns before
+              registering anything, so there is no Basic prompt and no failure
+              counter. Setting this explicitly is the difference between "we
+              decided this" and "someone forgot the secret": without it Codeman
+              still starts, but prints a multi-line warning on every boot that
+              buries anything else in the log.
+            */}}
+            - name: CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK
+              value: "1"
+            {{- end }}
             {{/*
               extraEnv accepts the full Kubernetes env-entry shape, so callers
               can supply secretKeyRef / configMapKeyRef / fieldRef entries.

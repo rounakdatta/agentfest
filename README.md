@@ -68,8 +68,28 @@ pinned to a version.
 
 **Codeman is an RCE surface by design.** It launches agents with
 `--dangerously-skip-permissions` by default, so anyone who reaches the UI
-controls the machine. It gets a password *and* sits behind Tinyauth *and* is
-only reachable over Tailscale. None of those three is optional.
+controls the machine. Whatever fronts it is not a nicety; it is the only thing
+between the internet and a shell running as you, with your credentials.
+
+Be precise about what is actually in front of it, because this is easy to get
+wrong. The deployed hostname resolves to a **public IP** — cert-manager's
+HTTP-01 solver needs port 80 reachable — so "it's on the tailnet" is not true
+of the Traefik ingress and should not be counted as a layer. Today the honest
+answer for `festie` is: **Tinyauth (Google OAuth, email whitelist), and that is
+it.**
+
+Codeman's own password is available (`auth.enabled`) but off for `festie`, and
+`values.yaml` explains that call at length. The short version: it is HTTP Basic
+and only HTTP Basic — there is no login route in Codeman to switch to — and its
+hardcoded brute-force limiter behaves badly behind a reverse proxy, because
+Codeman builds Fastify without `trustProxy` so every client shares one bucket of
+ten failures. Behind an authenticating proxy it locks out the owner more
+reliably than an attacker.
+
+If you want a genuine second factor here, put it at the edge where you control
+it — client certificates via a Traefik `TLSOption`, or moving the ingress onto
+the tailnet and switching cert-manager to a DNS-01 solver so port 80 need not be
+public. Both are real work; neither is done.
 
 **Set `codeman.allowedHosts`.** Codeman rejects unknown `Host` headers before
 any handler runs, as a DNS-rebinding guard. `.ts.net` is allowed out of the
