@@ -3,7 +3,7 @@ image:
   # Pinned to the same tag as Chart.appVersion so a chart upgrade always
   # corresponds to one specific image. Override at install time if you need
   # to roll forward without bumping the chart.
-  tag: "0.1.24"
+  tag: "0.1.25"
   pullPolicy: IfNotPresent
 
 # One deployment is one computer. Scaling this is meaningless: the whole
@@ -60,7 +60,34 @@ persistence:
 # Codeman launches agents with --dangerously-skip-permissions by default, so
 # whoever reaches the UI controls the machine. This password is a second lock
 # behind Tinyauth, not a substitute for it.
+#
+# Turning it off is a real reduction in defence, and it is off-by-choice rather
+# than off-by-accident, so read this before flipping it.
+#
+# What you lose: the second lock. Whatever fronts the ingress becomes the only
+# thing between the network and a shell.
+#
+# What you gain: Codeman's auth is HTTP Basic, and only HTTP Basic — there is no
+# login route in the codebase to switch to. That means a browser-native dialog a
+# password manager cannot fill, guarding a shared static secret. It also brings a
+# brute-force limiter that is actively hostile behind a reverse proxy:
+#
+#   * AUTH_FAILURE_MAX (10) and the 15-minute window are hardcoded constants
+#     with no environment override.
+#   * The 429 is sent WITHOUT a WWW-Authenticate header, so once it trips the
+#     browser stops offering the password dialog at all. The credential check
+#     actually runs before the limiter, so the right password would still be
+#     accepted — you are simply never asked for it again.
+#   * Codeman builds its Fastify instance without trustProxy and never reads
+#     X-Forwarded-For, so behind an ingress every client shares one bucket of
+#     ten. Any credential-less request counts, including the first request of a
+#     page load.
+#
+# Net: behind an authenticating proxy it is a self-inflicted lockout more often
+# than a defence. Disable it only where something real (SSO, mTLS, a tailnet)
+# already stands in front.
 auth:
+  enabled: true
   create: true
   codemanPassword: ""
   existingSecret: ""
