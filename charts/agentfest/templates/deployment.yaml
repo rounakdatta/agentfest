@@ -25,6 +25,10 @@ spec:
         - name: agentfest
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           env:
             - name: AGENTFEST_CODEMAN_VERSION
               value: {{ .Values.codeman.version | quote }}
