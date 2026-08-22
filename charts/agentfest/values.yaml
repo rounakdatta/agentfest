@@ -3,7 +3,7 @@ image:
   # Pinned to the same tag as Chart.appVersion so a chart upgrade always
   # corresponds to one specific image. Override at install time if you need
   # to roll forward without bumping the chart.
-  tag: "0.1.28"
+  tag: "0.1.30"
   pullPolicy: IfNotPresent
 
 # One deployment is one computer. Scaling this is meaningless: the whole
@@ -19,18 +19,17 @@ replicaCount: 1
 # nixpkgs' 2.1.86 predates Opus 5 and silently falls back to Opus 4.6 — and a
 # read-only Nix store cannot self-update out of that.
 #
-# "latest" resolves against the registry on every boot, so the machine tracks
-# upstream by restarting rather than by editing a pin. It still only reinstalls
-# when upstream has actually moved. Set an exact version to freeze it.
+# Pinned to an exact version rather than "latest", so upgrades are deliberate
+# and reproducible (the marker-file logic still skips the reinstall when the pin
+# has not moved). Bump after checking the release, then restart the pod.
 claudeCode:
-  version: "latest"
+  version: "2.1.233"
 
 codeman:
-  # "latest" tracks upstream on restart; an exact version freezes it. Codeman
-  # ships several releases a week, so tracking is usually what you want — but
-  # note a Codeman upgrade recompiles node-pty from source, which is the
-  # slowest part of a boot.
-  version: "latest"
+  # Pinned to an exact version rather than "latest", so upgrades are deliberate
+  # and reproducible. Bumping is a one-line edit + pod restart; note the upgrade
+  # recompiles node-pty from source, the slowest part of a boot.
+  version: "1.19.3"
   port: 3000
   # Codeman rejects unknown Host headers before any handler runs (it is a
   # DNS-rebinding guard). Tailscale's .ts.net is allowed out of the box, but a
@@ -125,6 +124,25 @@ securityContext:
   runAsGroup: 100
   # Makes the PVC group-writable so the non-root user actually owns its home.
   fsGroup: 100
+  # Apply the container runtime's default seccomp profile.
+  seccompProfile:
+    type: RuntimeDefault
+
+# Container-level securityContext, applied per-container in the Deployment.
+# Distinct from the pod securityContext above: capabilities and privilege
+# escalation are container properties, not pod ones.
+containerSecurityContext:
+  # The entrypoint never needs to gain privileges.
+  allowPrivilegeEscalation: false
+  capabilities:
+    # Drop every Linux capability. Nothing here needs one: the process is
+    # non-root and Codeman listens on 3000 (no bind below 1024).
+    drop:
+      - ALL
+  # Left false on purpose: the entrypoint's mktemp and a few tools write to
+  # /tmp and /var/tmp, which live on the image rootfs. To enable it, also mount
+  # emptyDir volumes at /tmp and /var/tmp, then flip this to true.
+  readOnlyRootFilesystem: false
 
 resources:
   requests:
