@@ -60,18 +60,13 @@ jobs:
           echo "IMAGE_ARCHIVE=$(readlink -f result)" >> "$GITHUB_ENV"
           ls -lh result/ 2>/dev/null || ls -lh "$(readlink -f result)"
 
-      - name: Load image
+      # No `docker load`: loading a multi-GB archive into the daemon was the
+      # single slowest CI step. skopeo reads the nix-built archive directly, so
+      # we only validate it here and push straight to the registry below.
+      - name: Inspect image archive
         run: |
-          docker load < "$IMAGE_ARCHIVE"
-          docker image ls "${{ env.REGISTRY }}/${{ github.repository_owner }}/agentfest"
-
-      - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          nix run --extra-experimental-features 'nix-command flakes' nixpkgs#skopeo -- \
+            inspect docker-archive:"$IMAGE_ARCHIVE" | head -40
 
       - name: Extract metadata
         if: github.event_name != 'pull_request'
@@ -86,17 +81,27 @@ jobs:
             type=sha,prefix=
             type=raw,value=latest,enable={{is_default_branch}}
 
-      # The Nix build always names the image :latest, so retag it onto every
-      # tag the metadata action computed and push each one.
-      - name: Tag and push image
+      # Push each computed tag straight from the archive with skopeo -- no
+      # docker daemon, no `docker load`. The first tag pushes all blobs; the
+      # rest are server-side copies that reuse them, so the archive is read once.
+      - name: Push image to GHCR
         if: github.event_name != 'pull_request'
+        env:
+          CREDS: "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}"
         run: |
-          SOURCE="${{ env.REGISTRY }}/${{ github.repository_owner }}/agentfest:latest"
+          sk() { nix run --extra-experimental-features 'nix-command flakes' nixpkgs#skopeo -- "$@"; }
+          first=""
           while IFS= read -r tag; do
             [ -n "$tag" ] || continue
             echo "==> $tag"
-            docker tag "$SOURCE" "$tag"
-            docker push "$tag"
+            if [ -z "$first" ]; then
+              sk copy --insecure-policy --dest-creds "$CREDS" \
+                docker-archive:"$IMAGE_ARCHIVE" docker://"$tag"
+              first="$tag"
+            else
+              sk copy --insecure-policy --src-creds "$CREDS" --dest-creds "$CREDS" \
+                docker://"$first" docker://"$tag"
+            fi
           done <<< "${{ steps.meta.outputs.tags }}"
 
       - name: Push Helm chart to GHCR
