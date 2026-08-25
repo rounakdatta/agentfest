@@ -1,3 +1,6 @@
 result
 result-*
 *.tgz
+
+# Claude Code scratch worktrees — embedded git repos, never part of a release.
+.claude/worktrees/
