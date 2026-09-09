@@ -94,6 +94,10 @@ spec:
               mountPath: {{ .Values.ssh.mountPath }}
               readOnly: true
             {{- end }}
+            {{- if .Values.dshm.enabled }}
+            - name: dshm
+              mountPath: /dev/shm
+            {{- end }}
       volumes:
         {{- if .Values.persistence.enabled }}
         - name: home
@@ -105,6 +109,12 @@ spec:
           secret:
             secretName: {{ .Values.ssh.existingSecret }}
             defaultMode: {{ .Values.ssh.defaultMode }}
+        {{- end }}
+        {{- if .Values.dshm.enabled }}
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.dshm.size }}
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
