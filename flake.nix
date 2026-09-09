@@ -187,6 +187,9 @@
           git
           tmux
 
+          # PID 1, see the exec at the end of this script.
+          tini
+
           # aicodeman depends on node-pty, which ships no linux-x64 prebuild
           # and falls back to `node-gyp rebuild`. That needs a full C++
           # toolchain and Python at npm-install time — and gyp's generated
@@ -471,7 +474,23 @@
           fi
 
           log "starting codeman on ''${CODEMAN_BIND_HOST:-0.0.0.0}:''${CODEMAN_PORT:-3000}"
-          exec codeman web -H "''${CODEMAN_BIND_HOST:-0.0.0.0}"
+
+          # Through tini, so that PID 1 reaps. Exec'ing codeman directly made
+          # it PID 1, and it is not an init: it never reaps the orphans that a
+          # long agent session leaves behind, so they accumulate as zombies for
+          # the life of the pod. Two costs, both seen for real:
+          #
+          #   - they hold PIDs. A handful of Chrome launches left 434 of them.
+          #   - `kill -0` SUCCEEDS on a zombie, so any wait loop that probes a
+          #     pid with a signal waits forever. That silently turned finished
+          #     provider logins into "still-waiting" timeouts in the
+          #     automate-mic-doctor-refresh skill until it was taught to read
+          #     /proc/<pid>/stat instead.
+          #
+          # -g so signals reach the whole process group: terminationGracePeriod
+          # is 60s precisely so a long build is not truncated, and that only
+          # works if the children are actually signalled.
+          exec tini -g -- codeman web -H "''${CODEMAN_BIND_HOST:-0.0.0.0}"
         '';
       };
 

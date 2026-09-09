@@ -3,7 +3,7 @@ image:
   # Pinned to the same tag as Chart.appVersion so a chart upgrade always
   # corresponds to one specific image. Override at install time if you need
   # to roll forward without bumping the chart.
-  tag: "0.1.32"
+  tag: "0.1.33"
   pullPolicy: IfNotPresent
 
 # One deployment is one computer. Scaling this is meaningless: the whole
@@ -143,6 +143,22 @@ containerSecurityContext:
   # /tmp and /var/tmp, which live on the image rootfs. To enable it, also mount
   # emptyDir volumes at /tmp and /var/tmp, then flip this to true.
   readOnlyRootFilesystem: false
+
+# A real /dev/shm. The container runtime's default is 64Mi, which is where
+# Chrome puts renderer shared memory — and Google's sign-in page exhausts it
+# (reCAPTCHA in an iframe). The renderer then wedges rather than crashing: the
+# browser stays up and reports the right URL while every page-level CDP call
+# times out, which reads as the automation being broken rather than the page
+# being dead. Cost an afternoon to find in automate-mic-doctor-refresh.
+#
+# Memory-backed, so it counts against the container's memory limit rather than
+# the node's disk. 1Gi against a 24Gi limit is noise.
+#
+# The skill measures /dev/shm and only adds --disable-dev-shm-usage below
+# 256Mi, so mounting this retires that workaround on its own.
+dshm:
+  enabled: true
+  size: 1Gi
 
 resources:
   requests:
