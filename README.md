@@ -59,10 +59,28 @@ nix build .#image          # produces a docker-archive tarball
 docker load < result
 ```
 
+CI publishes on a `v*` tag only — a tag is what produces both the image and a
+chart at a matching version. Pushes to `main` build nothing: they would be the
+same commit a second time, and the tags a branch build produced (`main`,
+`latest`, `<sha>`) are consumed by nobody, since `homelab.setup` pins an exact
+chart version. So: merge, then tag.
+
 CI pushes the image to `ghcr.io/rounakdatta/agentfest` and the chart to
 `oci://ghcr.io/rounakdatta/charts`, matching the `texas-fold-em` pipeline.
 `homelab.setup` then consumes the chart through a Kustomize `helmCharts` block
 pinned to a version.
+
+### Optional: `CACHIX_AUTH_TOKEN`
+
+A repository secret. Without it the build still succeeds, it is just slower:
+Cachix logs `Pushing is disabled`, nothing is ever cached, and every run
+rebuilds ~160 leaf derivations (fish completions, the home-manager generation,
+`veans`) from source. With a write token those land in the `rounakdatta` cache
+and later runs substitute them.
+
+It is an accelerator, never a correctness input — Nix store paths are
+content-addressed and verified, so a fork without the token falls back to
+`cache.nixos.org` and builds the remainder. A fresh clone needs nothing.
 
 ## Things worth knowing before deploying
 
