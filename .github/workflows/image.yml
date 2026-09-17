@@ -5,6 +5,10 @@ on:
     tags: ['v*']
   pull_request:
     branches: [main]
+  # Build any ref on demand without cutting a tag -- useful for warming the
+  # Cachix cache, or checking a dotfiles bump before it is released.
+  # Publishes nothing: every push step is gated on a v* tag.
+  workflow_dispatch: {}
 
 # A release moves main and then tags it. Building both is the same commit
 # twice, and the branch build's tags (latest / main / <sha>) are consumed by
@@ -77,7 +81,7 @@ jobs:
           ls -lh result/ 2>/dev/null || ls -lh "$(readlink -f result)"
 
       - name: Extract metadata
-        if: github.event_name != 'pull_request'
+        if: startsWith(github.ref, 'refs/tags/v')
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -95,7 +99,7 @@ jobs:
       # pushes all blobs; the
       # rest are server-side copies that reuse them, so the archive is read once.
       - name: Push image to GHCR
-        if: github.event_name != 'pull_request'
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           CREDS: "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}"
         run: |
@@ -115,7 +119,7 @@ jobs:
           done <<< "${{ steps.meta.outputs.tags }}"
 
       - name: Push Helm chart to GHCR
-        if: github.event_name != 'pull_request'
+        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
           # Derive the chart version from the tag rather than trusting
