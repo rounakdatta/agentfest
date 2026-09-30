@@ -231,6 +231,42 @@
         console.log("[agentfest] relay clients must present the daemon password");
       '';
 
+      # The mode new Claude agents start in, in every client, moved from
+      # Paseo's hardcoded "auto" to AGENTFEST_PASEO_CLAUDE_DEFAULT_MODE (the
+      # chart's paseo.claudeDefaultMode). Paseo's config has no key for it:
+      # claudeModeCatalog() returns a literal, and the app preselects whatever
+      # that says. Everything else a new agent starts with — model, thinking
+      # level, profiles, projects — is ordinary Paseo config, declared in
+      # dotfiles (configs/paseo).
+      #
+      # A preference, not a lock, so unlike paseoHarden this fails soft: if an
+      # upgrade reshapes the code, Paseo starts with its own default and the log
+      # says so. An unset value writes "auto" back, so removing the chart value
+      # really does restore upstream behaviour.
+      paseoDefaults = pkgs.writeText "agentfest-paseo-defaults.mjs" ''
+        import { readFileSync, writeFileSync } from "node:fs";
+        import path from "node:path";
+
+        const [serverRoot, wanted] = process.argv.slice(2);
+        const modes = ["plan", "default", "acceptEdits", "auto", "bypassPermissions"];
+        if (!modes.includes(wanted)) {
+          console.error("[agentfest] WARNING: unknown Claude mode " + JSON.stringify(wanted) + "; Paseo keeps its own default");
+          process.exit(0);
+        }
+
+        const file = path.join(serverRoot, "dist/server/server/agent/providers/claude/agent.js");
+        const pattern = /return \{ modes: DEFAULT_MODES, defaultModeId: "[A-Za-z]+"(?: \/\* agentfest: default mode \*\/)? \};/g;
+        const source = readFileSync(file, "utf8");
+        const found = (source.match(pattern) ?? []).length;
+        if (found !== 1) {
+          console.error("[agentfest] WARNING: " + found + " default-mode sites in " + file + ", expected 1; Paseo keeps its own default");
+          process.exit(0);
+        }
+        const replacement = "return { modes: DEFAULT_MODES, defaultModeId: " + JSON.stringify(wanted) + " /* agentfest: default mode */ };";
+        writeFileSync(file, source.replace(pattern, replacement));
+        console.log("[agentfest] new Claude agents start in " + wanted);
+      '';
+
       # What tini runs: Paseo's own supervisor, restarted if it ever exits.
       #
       # Paseo's supervisor already restarts its worker after a crash; this loop
@@ -248,21 +284,46 @@
       # start with "Another Paseo daemon is already running". Nothing else in
       # this container starts a daemon on this home, so the file is always stale
       # here.
+      #
+      # After each start, once the daemon answers, it runs dotfiles'
+      # `paseo-apply-declared` (configs/paseo) if the profile provides it: that
+      # registers the declared projects, which Paseo only accepts through its
+      # API, never from a file. In the background, so a slow or failing apply
+      # never holds the daemon up; it is idempotent, so every restart may rerun
+      # it.
       paseoRun = pkgs.writeShellApplication {
         name = "agentfest-paseo";
-        runtimeInputs = with pkgs; [ coreutils nodejs ];
+        runtimeInputs = with pkgs; [ coreutils curl nodejs ];
         text = ''
           log() { printf '[agentfest] %s\n' "$*"; }
 
           SERVER_ROOT="$1"
           PASEO_HOME="''${PASEO_HOME:-$HOME/.paseo}"
           export PASEO_HOME
+          LISTEN="''${PASEO_LISTEN:-127.0.0.1:6767}"
+          HEALTH_URL="http://127.0.0.1:''${LISTEN##*:}/api/health"
+
+          apply_declared() {
+            for _ in $(seq 1 120); do
+              if curl -fsS -o /dev/null --max-time 2 "$HEALTH_URL" 2>/dev/null; then
+                if command -v paseo-apply-declared >/dev/null 2>&1; then
+                  timeout 300 paseo-apply-declared 2>&1 |
+                    while IFS= read -r line; do log "apply-declared: $line"; done || true
+                fi
+                return 0
+              fi
+              sleep 2
+            done
+            log "WARNING: Paseo never answered on $HEALTH_URL; declared projects not applied"
+          }
 
           stopping=0
           child=""
+          applier=""
           on_signal() {
             stopping=1
             if [ -n "$child" ]; then kill -TERM "$child" 2>/dev/null || true; fi
+            if [ -n "$applier" ]; then kill -TERM "$applier" 2>/dev/null || true; fi
           }
           trap on_signal TERM INT
 
@@ -274,12 +335,16 @@
               wait $! || true
               continue
             fi
+            node ${paseoDefaults} "$SERVER_ROOT" "''${AGENTFEST_PASEO_CLAUDE_DEFAULT_MODE:-auto}" || true
 
             mkdir -p "$PASEO_HOME"
             rm -f "$PASEO_HOME/paseo.pid"
 
             node "$SERVER_ROOT/dist/scripts/supervisor-entrypoint.js" &
             child=$!
+            if [ -n "$applier" ]; then kill -TERM "$applier" 2>/dev/null || true; fi
+            apply_declared &
+            applier=$!
             # The first wait returns early when a trapped signal arrives; the
             # second reaps the child once it has finished shutting down.
             wait "$child" || true
