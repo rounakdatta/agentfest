@@ -1,5 +1,5 @@
 {
-  description = "agentfest — a persistent remote computer whose primary UI is Claude Code";
+  description = "agentfest — a persistent remote computer that runs coding agents, driven from Paseo";
 
   inputs = {
     # festie — the definition of what the machine *is* — lives in dotfiles.
@@ -45,6 +45,16 @@
       brewPrefix = "${homeDir}/.homebrew";
       brewBin = "${brewPrefix}/bin";
 
+      # Paseo installs into a prefix of its own rather than the global one
+      # (~/.npm-global), on purpose. The app's "update" button runs
+      # `npm i -g @getpaseo/cli` and refuses unless the daemon itself runs from
+      # that global install. Outside it the button fails safely, so the version
+      # that runs is always the one the chart pins -- instead of drifting out of
+      # band the way claude-code's did behind its marker file. The entrypoint
+      # links the CLI into paseoBin; nothing else in the prefix is on PATH.
+      paseoPrefix = "${homeDir}/.paseo-app";
+      paseoBin = "${paseoPrefix}/bin";
+
       # localBin leads so a mic fetched by dotfiles wins over one installed by
       # brew: it needs nothing but gh, where brew's copy depends on a whole
       # package manager having bootstrapped correctly. The brew copy stays
@@ -54,17 +64,20 @@
       # `claude` is a wrapper that layers hierarchical skills on, and the npm
       # package installs a bin of the same name. The wrapper has to win the PATH
       # lookup and reach the real binary through CLAUDE_REAL_BINARY instead.
-      basePath = "${localBin}:${hmProfileBin}:${npmBin}:${homeDir}/.nix-profile/bin:${brewBin}:/bin:/usr/bin";
+      # This matters more than it did under Codeman: Paseo launches whichever
+      # `claude` the daemon's PATH resolves first, so this order is what decides
+      # whether its agents get the inherited skills.
+      basePath = "${localBin}:${paseoBin}:${hmProfileBin}:${npmBin}:${homeDir}/.nix-profile/bin:${brewBin}:/bin:/usr/bin";
 
       # The whole point of the exercise: the image's environment IS the
       # laptop's environment, evaluated for Linux.
       homeActivation = dotfiles.homeConfigurations.festie.activationPackage;
 
-      # Codeman ships several releases a week, so it is pinned by the *chart*
+      # Paseo ships several releases a week, so it is pinned by the *chart*
       # rather than baked into the image: bumping it is a values.yaml edit and
       # a pod restart, not an image rebuild. It installs into the persistent
       # volume, so it survives restarts and is only fetched when the pin moves.
-      defaultCodemanVersion = "latest";
+      defaultPaseoVersion = "latest";
 
       # Claude Code comes from npm, not nixpkgs, for the same reason the laptop
       # takes it from Homebrew: the client version gates which models it can
@@ -126,7 +139,7 @@
         done
       '';
 
-      # dockerTools.fakeNss only knows root and nobody. Codeman, tmux and
+      # dockerTools.fakeNss only knows root and nobody. Paseo, tmux and
       # Claude Code all want a real user with a real home.
       nssFiles = pkgs.runCommand "agentfest-nss" { } ''
         mkdir -p "$out/etc"
@@ -170,6 +183,117 @@
         EOF
       '';
 
+      # Closes the one gap in Paseo's relay authentication (getpaseo/paseo#4087).
+      #
+      # The relay is end-to-end encrypted and never learns the daemon's key, so
+      # it cannot connect on its own. What it does not do yet is require the
+      # daemon password: a relay client that sends no password at all is let in
+      # as owner, a stopgap upstream keeps until new mobile builds reach both
+      # stores (`COMPAT(relayPasswordOptional)` in session-admission-auth).
+      # Until then the pairing link alone is a full login. Removing that one
+      # branch makes the link AND the password necessary; current apps already
+      # send the password inside the encrypted channel.
+      #
+      # Fails closed. The result is proven by calling the real function, not by
+      # trusting the text: if an upgrade reshapes the code so the patch no
+      # longer applies, the self-test fails and Paseo does not start. Once
+      # upstream drops the stopgap there is nothing to patch and the test still
+      # passes, so this can be deleted then.
+      paseoHarden = pkgs.writeText "agentfest-paseo-harden.mjs" ''
+        import { readFileSync, writeFileSync } from "node:fs";
+        import path from "node:path";
+        import { pathToFileURL } from "node:url";
+
+        const serverRoot = process.argv[2];
+        const file = path.join(serverRoot, "dist/server/server/session-admission-auth.js");
+        const exemption = 'if (transport === "relay") {';
+        const closed = 'if (false /* agentfest: relay clients need the password too */) {';
+
+        const source = readFileSync(file, "utf8");
+        const found = source.split(exemption).length - 1;
+        if (found > 1) {
+          console.error("[agentfest] " + found + " relay exemptions in " + file + ", expected at most 1");
+          process.exit(1);
+        }
+        if (found === 1) writeFileSync(file, source.replace(exemption, closed));
+
+        const { resolveSessionAdmission } = await import(pathToFileURL(file).href);
+        const result = await resolveSessionAdmission({
+          credential: undefined,
+          passwordHash: "set",
+          localCredential: null,
+          transport: "relay",
+        });
+        if (!result.rejection) {
+          console.error("[agentfest] a relay client with no password is still admitted");
+          process.exit(1);
+        }
+        console.log("[agentfest] relay clients must present the daemon password");
+      '';
+
+      # What tini runs: Paseo's own supervisor, restarted if it ever exits.
+      #
+      # Paseo's supervisor already restarts its worker after a crash; this loop
+      # covers the supervisor itself. It is what lets Paseo stop -- for an
+      # upgrade, a config change, or a crash -- without the container going with
+      # it. Under Codeman that was not true: Codeman was tini's only child, so
+      # every Codeman exit restarted the pod and took every session with it.
+      # A Paseo restart still ends every running agent turn (agents are the
+      # daemon's children), but the container, its terminals' tmux servers,
+      # Chrome and anything else started by hand all stay up.
+      #
+      # The pid lock is removed before each start because it lives on the
+      # persistent volume: after an unclean container stop, its pid can belong
+      # to an unrelated process in the new container, and Paseo then refuses to
+      # start with "Another Paseo daemon is already running". Nothing else in
+      # this container starts a daemon on this home, so the file is always stale
+      # here.
+      paseoRun = pkgs.writeShellApplication {
+        name = "agentfest-paseo";
+        runtimeInputs = with pkgs; [ coreutils nodejs ];
+        text = ''
+          log() { printf '[agentfest] %s\n' "$*"; }
+
+          SERVER_ROOT="$1"
+          PASEO_HOME="''${PASEO_HOME:-$HOME/.paseo}"
+          export PASEO_HOME
+
+          stopping=0
+          child=""
+          on_signal() {
+            stopping=1
+            if [ -n "$child" ]; then kill -TERM "$child" 2>/dev/null || true; fi
+          }
+          trap on_signal TERM INT
+
+          while [ "$stopping" = 0 ]; do
+            if ! node ${paseoHarden} "$SERVER_ROOT"; then
+              log "ERROR: not starting Paseo: the relay password check could not be enforced"
+              log "ERROR: retrying in 60s; fix the pin or the patch in agentfest's flake.nix"
+              sleep 60 &
+              wait $! || true
+              continue
+            fi
+
+            mkdir -p "$PASEO_HOME"
+            rm -f "$PASEO_HOME/paseo.pid"
+
+            node "$SERVER_ROOT/dist/scripts/supervisor-entrypoint.js" &
+            child=$!
+            # The first wait returns early when a trapped signal arrives; the
+            # second reaps the child once it has finished shutting down.
+            wait "$child" || true
+            wait "$child" 2>/dev/null || true
+            child=""
+
+            [ "$stopping" = 0 ] || break
+            log "Paseo exited; restarting in 5s"
+            sleep 5 &
+            wait $! || true
+          done
+        '';
+      };
+
       entrypoint = pkgs.writeShellApplication {
         name = "agentfest-init";
         runtimeInputs = with pkgs; [
@@ -182,17 +306,19 @@
 
           # Floor for things the entrypoint needs before — or without — a
           # successful activation. git is used by claude-skills' clone during
-          # activation itself, and tmux is what Codeman drives; relying on
-          # ~/.nix-profile for either means one failure cascades into three.
+          # activation itself, and tmux is what a long-lived Paseo terminal
+          # should run inside; relying on ~/.nix-profile for either means one
+          # failure cascades into three.
           git
           tmux
 
           # PID 1, see the exec at the end of this script.
           tini
 
-          # aicodeman depends on node-pty, which ships no linux-x64 prebuild
-          # and falls back to `node-gyp rebuild`. That needs a full C++
-          # toolchain and Python at npm-install time — and gyp's generated
+          # Any npm package with a native addon and no linux-x64 prebuild falls
+          # back to `node-gyp rebuild`. Paseo's own (node-pty, msgpackr) ship
+          # prebuilds, but MCP servers installed through npm/npx often do not,
+          # and gyp needs a full C++ toolchain and Python -- and its generated
           # Makefile shells out to sed and awk, which are not in coreutils.
           python3
           gnumake
@@ -204,7 +330,7 @@
         ];
         text = ''
           HOME_DIR="''${HOME:-${homeDir}}"
-          CODEMAN_VERSION="''${AGENTFEST_CODEMAN_VERSION:-${defaultCodemanVersion}}"
+          PASEO_VERSION="''${AGENTFEST_PASEO_VERSION:-${defaultPaseoVersion}}"
           CLAUDE_CODE_VERSION="''${AGENTFEST_CLAUDE_CODE_VERSION:-${defaultClaudeCodeVersion}}"
           ACTIVATION="''${AGENTFEST_HOME_ACTIVATION:-${homeActivation}}"
 
@@ -318,8 +444,8 @@
 
           if ! "$ACTIVATION/activate"; then
             log "WARNING: home-manager activation FAILED."
-            log "WARNING: starting Codeman anyway so the terminal stays reachable"
-            log "WARNING: and you can debug from the very UI you'd otherwise lose."
+            log "WARNING: starting Paseo anyway so a terminal stays reachable"
+            log "WARNING: and you can debug from the very app you'd otherwise lose."
             log "WARNING: the usual cause is claude-skills' agent-smith clone"
             log "WARNING: having no SSH key — see the chart's ssh.existingSecret."
           fi
@@ -340,7 +466,7 @@
               # hm-session-vars.sh probes $__HM_SESS_VARS_SOURCED before
               # setting it, which is fatal under writeShellApplication's
               # `set -u`. Drop nounset just for the source — the alternative
-              # is the entrypoint dying here and Codeman never starting.
+              # is the entrypoint dying here and Paseo never starting.
               set +u
               # shellcheck disable=SC1090,SC1091
               . "$prof/etc/profile.d/hm-session-vars.sh"
@@ -348,7 +474,20 @@
             fi
           done
 
-          export PATH="$HOME_DIR/.npm-global/bin:$PATH"
+          # The npm prefix is NOT prepended here, although it used to be. The
+          # image's PATH (basePath) already carries it, deliberately after the
+          # home-manager profile, and prepending it undid exactly that: under
+          # Codeman every session resolved `claude` to the npm binary and ran
+          # without dotfiles' wrapper, so the hierarchical skills never loaded.
+          # Paseo launches whatever `claude` this PATH finds first.
+
+          # Paseo's terminals start $SHELL. It names fish, which only exists
+          # once activation has populated the profile; fall back to the passwd
+          # shell rather than have every terminal fail to spawn.
+          if [ ! -x "''${SHELL:-}" ]; then
+            log "WARNING: ''${SHELL:-SHELL} is missing (activation?); terminals will use bash"
+            export SHELL="${pkgs.bashInteractive}/bin/bash"
+          fi
 
           # home-manager runs importGpgKey — which auto-starts gpg-agent —
           # before linkGeneration writes ~/.gnupg/gpg-agent.conf. The agent
@@ -371,24 +510,36 @@
           # dependency on a boot that is already doing a lot.
           export npm_config_nodedir="${pkgs.nodejs}"
 
-          # Install a package unless the recorded version already matches.
+          # Install a package unless the version actually installed already
+          # matches the pin.
+          #
+          # "Installed" means the package's own package.json, not a marker file
+          # this script wrote. A marker only records what this script last did:
+          # when claude-code was upgraded out of band on festie, its marker
+          # still said the pinned 2.1.233 while 2.1.278 ran, so every boot
+          # skipped the install and the pin silently stopped meaning anything.
+          # Reading the real version makes a drifted install converge back.
           #
           # A spec of "latest" resolves against the registry on every boot, so
           # the machine tracks upstream by restarting rather than by editing a
-          # pin. The marker still guards the install itself: reinstalling is
-          # not free — aicodeman compiles node-pty from source — so we pay only
-          # when upstream has actually moved.
-          #
-          # A registry lookup failure is deliberately not fatal. Keeping the
-          # version already on the volume is always better than refusing to
+          # pin. A registry lookup failure is deliberately not fatal: keeping
+          # the version already on the volume is always better than refusing to
           # boot because npmjs.org was briefly unreachable.
+          #
+          # Usage: ensure_npm_pkg <package> <spec> <its package.json once
+          # installed> <npm install args that place it>...
           ensure_npm_pkg() {
-            pkg="$1"; spec="$2"; marker="$NPM_CONFIG_PREFIX/.agentfest-$3-version"
+            pkg="$1"; spec="$2"; manifest="$3"; shift 3
+
+            current=""
+            if [ -f "$manifest" ]; then
+              current="$(node -p 'require(process.argv[1]).version' "$manifest" 2>/dev/null || true)"
+            fi
 
             if [ "$spec" = "latest" ]; then
               target="$(npm view "$pkg" version 2>/dev/null || true)"
               if [ -z "$target" ]; then
-                log "WARNING: could not resolve $pkg@latest; keeping $(cat "$marker" 2>/dev/null || echo none)"
+                log "WARNING: could not resolve $pkg@latest; keeping ''${current:-nothing}"
                 return 0
               fi
               log "$pkg tracks latest -> $target"
@@ -396,27 +547,35 @@
               target="$spec"
             fi
 
-            if [ "$(cat "$marker" 2>/dev/null || true)" = "$target" ]; then
-              log "$pkg@$target already present"
+            if [ "$current" = "$target" ]; then
+              log "$pkg@$target already installed"
               return 0
             fi
 
-            log "installing $pkg@$target"
-            if npm install -g "$pkg@$target"; then
-              printf '%s\n' "$target" > "$marker"
-            else
-              log "WARNING: installing $pkg@$target FAILED; leaving previous install in place"
+            log "installing $pkg@$target (was ''${current:-not installed})"
+            if ! npm install --no-audit --no-fund "$@" "$pkg@$target"; then
+              log "WARNING: installing $pkg@$target FAILED; leaving ''${current:-nothing} in place"
             fi
           }
 
-          # The npm package is `aicodeman`; `codeman` on npm is an unrelated
-          # 0.0.1 squat.
-          ensure_npm_pkg aicodeman "$CODEMAN_VERSION" codeman
-          ensure_npm_pkg @anthropic-ai/claude-code "$CLAUDE_CODE_VERSION" claude-code
+          ensure_npm_pkg @anthropic-ai/claude-code "$CLAUDE_CODE_VERSION" \
+            "$NPM_CONFIG_PREFIX/lib/node_modules/@anthropic-ai/claude-code/package.json" -g
+
+          # --- 4a. Paseo ----------------------------------------------------
+          # Into its own prefix, not the global one; basePath explains why.
+          # Only the CLI is linked onto PATH: the prefix's node_modules/.bin
+          # also carries esbuild, node-which and friends, which have no
+          # business shadowing anything.
+          PASEO_PREFIX="${paseoPrefix}"
+          PASEO_SERVER_ROOT="$PASEO_PREFIX/node_modules/@getpaseo/server"
+          mkdir -p "$PASEO_PREFIX/bin"
+          ensure_npm_pkg @getpaseo/cli "$PASEO_VERSION" \
+            "$PASEO_PREFIX/node_modules/@getpaseo/cli/package.json" --prefix "$PASEO_PREFIX"
+          ln -sfn "$PASEO_PREFIX/node_modules/@getpaseo/cli/bin/paseo" "${paseoBin}/paseo"
 
           # --- 4b. Homebrew -------------------------------------------------
           # Installed into the persistent volume rather than baked into the
-          # image, for the same reason as Codeman and Claude Code: it is a
+          # image, for the same reason as Paseo and Claude Code: it is a
           # self-updating thing that would otherwise be frozen at image-build
           # time, and a read-only Nix store cannot host a package manager that
           # writes to its own prefix.
@@ -464,21 +623,22 @@
             export PATH="$PATH:$BREW_PREFIX/bin"
           fi
 
-          # --- 5. hand over to Codeman -------------------------------------
-          # -H binds beyond loopback, which Codeman refuses to do quietly
-          # without CODEMAN_PASSWORD. Tinyauth sits in front of it as well.
-          if [ -z "''${CODEMAN_PASSWORD:-}" ]; then
-            log "WARNING: CODEMAN_PASSWORD is unset — Codeman is an RCE surface"
-            log "WARNING: by design, so it should never be the only thing between"
-            log "WARNING: the network and this pod."
+          # --- 5. hand over to Paseo ---------------------------------------
+          # The daemon is reached through Paseo's end-to-end encrypted relay:
+          # it dials out, so nothing has to listen on a public address. Its
+          # password is what stops the pairing link from being a login on its
+          # own (see paseoHarden), so its absence is worth shouting about.
+          if [ -z "''${PASEO_PASSWORD:-}" ]; then
+            log "WARNING: PASEO_PASSWORD is unset — whoever holds the pairing"
+            log "WARNING: link controls this machine, as this user, with its keys."
           fi
 
-          log "starting codeman on ''${CODEMAN_BIND_HOST:-0.0.0.0}:''${CODEMAN_PORT:-3000}"
+          log "starting Paseo on ''${PASEO_LISTEN:-127.0.0.1:6767} (relay ''${PASEO_RELAY_ENABLED:-per config})"
 
-          # Through tini, so that PID 1 reaps. Exec'ing codeman directly made
-          # it PID 1, and it is not an init: it never reaps the orphans that a
-          # long agent session leaves behind, so they accumulate as zombies for
-          # the life of the pod. Two costs, both seen for real:
+          # Through tini, so that PID 1 reaps. Exec'ing a server directly makes
+          # it PID 1, and no Node server is an init: it never reaps the orphans
+          # that a long agent session leaves behind, so they accumulate as
+          # zombies for the life of the pod. Two costs, both seen for real:
           #
           #   - they hold PIDs. A handful of Chrome launches left 434 of them.
           #   - `kill -0` SUCCEEDS on a zombie, so any wait loop that probes a
@@ -490,7 +650,7 @@
           # -g so signals reach the whole process group: terminationGracePeriod
           # is 60s precisely so a long build is not truncated, and that only
           # works if the children are actually signalled.
-          exec tini -g -- codeman web -H "''${CODEMAN_BIND_HOST:-0.0.0.0}"
+          exec tini -g -- ${paseoRun}/bin/agentfest-paseo "$PASEO_SERVER_ROOT"
         '';
       };
 
@@ -562,7 +722,7 @@
 
         # Exposed on their own so CI (and a human) can build/inspect the
         # environment without producing a whole image.
-        inherit entrypoint homeActivation;
+        inherit entrypoint homeActivation paseoRun;
 
         # includeNixDB (via the *WithNixDb variant) is load-bearing, not a
         # nicety: home-manager's activate shells out to nix-env to set the
@@ -580,24 +740,25 @@
             Cmd = [ "${entrypoint}/bin/agentfest-init" ];
             User = "${toString uid}:${toString gid}";
             WorkingDir = homeDir;
-            ExposedPorts = { "3000/tcp" = { }; };
+            ExposedPorts = { "6767/tcp" = { }; };
             Env = [
               "HOME=${homeDir}"
               "USER=${user}"
               "PATH=${basePath}"
 
-              # Codeman resolves a pane's shell as $SHELL -> passwd -> /bin/bash,
-              # and only accepts a candidate that exists and is executable — so
-              # naming fish here yields fish when activation has populated the
-              # profile, and falls back to the passwd entry's bash when it has
-              # not. fish is on Codeman's own login-flag allowlist, so it still
-              # gets spawned as `-i -l` and reads /etc/profile like the rest.
+              # Paseo's terminals start $SHELL as-is, so this is the shell every
+              # terminal in the app gets. The entrypoint falls back to bash when
+              # activation has not produced fish.
               "SHELL=${hmProfileBin}/fish"
               "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
               "NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
               "AGENTFEST_HOME_ACTIVATION=${homeActivation}"
-              "AGENTFEST_CODEMAN_VERSION=${defaultCodemanVersion}"
+              "AGENTFEST_PASEO_VERSION=${defaultPaseoVersion}"
               "AGENTFEST_CLAUDE_CODE_VERSION=${defaultClaudeCodeVersion}"
+
+              # Loopback unless the chart says otherwise: the relay dials out,
+              # so the daemon needs no reachable listener to be usable.
+              "PASEO_LISTEN=127.0.0.1:6767"
               # dotfiles' claude wrapper resolves the real binary through this.
               # Points at the npm install rather than the nixpkgs one so the
               # client is current enough to know Opus 5 exists.
