@@ -17,10 +17,18 @@ spec:
     metadata:
       labels:
         {{- include "agentfest.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
     spec:
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       securityContext:
         {{- toYaml .Values.securityContext | nindent 8 }}
+      {{- with .Values.dnsConfig }}
+      dnsConfig:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: agentfest
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -30,39 +38,36 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           env:
-            - name: AGENTFEST_CODEMAN_VERSION
-              value: {{ .Values.codeman.version | quote }}
+            - name: AGENTFEST_PASEO_VERSION
+              value: {{ .Values.paseo.version | quote }}
             - name: AGENTFEST_CLAUDE_CODE_VERSION
               value: {{ .Values.claudeCode.version | quote }}
-            - name: CODEMAN_PORT
-              value: {{ .Values.codeman.port | quote }}
-            - name: CODEMAN_BIND_HOST
-              value: "0.0.0.0"
+            - name: PASEO_LISTEN
+              value: "{{ .Values.paseo.listenHost }}:{{ .Values.paseo.port }}"
+            - name: PASEO_RELAY_ENABLED
+              value: {{ .Values.paseo.relay.enabled | quote }}
+            {{- /*
+              Required rather than optional: without it the pairing link is a
+              complete login, and the entrypoint can only warn about that.
+            */}}
+            - name: PASEO_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "paseo.password.existingSecret must name a Secret holding the Paseo daemon password" .Values.paseo.password.existingSecret }}
+                  key: {{ .Values.paseo.password.key }}
+            {{- with .Values.paseo.hostnames }}
+            - name: PASEO_HOSTNAMES
+              value: {{ join "," . | quote }}
+            {{- end }}
+            - name: PASEO_DICTATION_ENABLED
+              value: {{ .Values.paseo.voice.enabled | quote }}
+            - name: PASEO_VOICE_MODE_ENABLED
+              value: {{ .Values.paseo.voice.enabled | quote }}
+            - name: PASEO_WEB_UI_ENABLED
+              value: {{ .Values.paseo.webUi.enabled | quote }}
             {{- if .Values.ssh.enabled }}
             - name: AGENTFEST_SSH_DIR
               value: {{ .Values.ssh.mountPath | quote }}
-            {{- end }}
-            {{- if .Values.codeman.allowedHosts }}
-            - name: CODEMAN_ALLOWED_HOSTS
-              value: {{ .Values.codeman.allowedHosts | quote }}
-            {{- end }}
-            {{- if .Values.auth.enabled }}
-            - name: CODEMAN_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.auth.existingSecret | default (printf "%s-auth" .Release.Name) }}
-                  key: codeman-password
-            {{- else }}
-            {{/*
-              With no CODEMAN_PASSWORD, Codeman's auth middleware returns before
-              registering anything, so there is no Basic prompt and no failure
-              counter. Setting this explicitly is the difference between "we
-              decided this" and "someone forgot the secret": without it Codeman
-              still starts, but prints a multi-line warning on every boot that
-              buries anything else in the log.
-            */}}
-            - name: CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK
-              value: "1"
             {{- end }}
             {{/*
               extraEnv accepts the full Kubernetes env-entry shape, so callers
@@ -72,16 +77,32 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           ports:
-            - name: http
-              containerPort: {{ .Values.codeman.port }}
+            - name: paseo
+              containerPort: {{ .Values.paseo.port }}
               protocol: TCP
-          {{/*
-            No readiness/liveness probes on purpose. First boot runs a
-            home-manager activation and an npm install before Codeman listens,
-            which can take minutes on a cold volume; a probe tuned for that is
-            useless afterwards, and a probe tuned for steady state would
-            restart-loop the very first deploy. Revisit once boot time is known.
+          {{- if .Values.readinessProbe.enabled }}
+          {{- /*
+            An exec probe, because the daemon usually listens on loopback where
+            the kubelet cannot reach it. /api/health is the one endpoint Paseo
+            serves without the password. There is deliberately no liveness
+            probe: restarting the container ends every agent turn, which is a
+            far worse outcome than a pod that reports not-ready.
           */}}
+          readinessProbe:
+            exec:
+              command:
+                - curl
+                - --fail
+                - --silent
+                - --output
+                - /dev/null
+                - --max-time
+                - "4"
+                - "http://127.0.0.1:{{ .Values.paseo.port }}/api/health"
+            periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
+          {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:

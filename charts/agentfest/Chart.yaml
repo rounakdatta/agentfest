@@ -1,6 +1,6 @@
 apiVersion: v2
 name: agentfest
-description: A persistent remote computer whose primary UI is Claude Code
+description: A persistent remote computer that runs coding agents, driven from Paseo
 type: application
-version: 0.1.39
-appVersion: "0.1.39"
+version: 0.2.0
+appVersion: "0.2.0"
