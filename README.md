@@ -85,6 +85,29 @@ It is an accelerator, never a correctness input — Nix store paths are
 content-addressed and verified, so a fork without the token falls back to
 `cache.nixos.org` and builds the remainder. A fresh clone needs nothing.
 
+## What a new agent starts with, and where that is declared
+
+Everything a client shows when you start an agent comes from the daemon, not
+the app, so the phone and the desktop behave the same without being set up
+twice. All of it is code:
+
+| What | Where it is declared | How it lands |
+|---|---|---|
+| Default model and thinking level (Opus 5.5, Max) | dotfiles `hosts/festie` → `programs.paseo.settings` | merged into `~/.paseo/config.json` at activation |
+| Agent profiles (`Claude · Max · Bypass`) | the same | the same, merged by `id` so profiles made in the app survive |
+| Projects in the sidebar (`personal`, `work`) | dotfiles `programs.paseo.projects` | registered after each daemon start by `paseo-apply-declared` |
+| Default permission mode (Bypass) | this chart, `paseo.claudeDefaultMode` | patched into Paseo's code at each start (`paseoDefaults`) |
+| Claude Code's own settings, skills, MCP servers | dotfiles `configs/claude` | as on every other host |
+
+Two of those break the pattern on purpose. Paseo creates projects only through
+its API, never from a file, so they are applied by an idempotent script rather
+than written. And Paseo hardcodes Claude's default mode to Auto with no config
+key, so that one default is a patch — a soft one: if an upgrade moves the code,
+Paseo starts with its own default and the log says so.
+
+What stays per device, because it lives in the app: pairing, the notification
+permission, and the app's own look and feel.
+
 ## Pairing a device
 
 The daemon is reached through Paseo's relay, so a phone needs neither a VPN nor
