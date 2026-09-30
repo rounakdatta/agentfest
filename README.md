@@ -178,9 +178,10 @@ are compared against the version actually installed, not a marker file, so an
 install that drifted is put back. Everything else follows the opposite rule: a
 new CLI means a PR against dotfiles and a new image.
 
-**Voice is off.** Paseo's local dictation and voice mode download ~800 MB of
-speech models and run them on the node's CPU. The phone keyboard's own
-dictation works in the composer anyway.
+**Voice is opt-in** (`paseo.voice.enabled`). Paseo's local dictation and voice
+mode run speech models on the node's CPU, fetched once (~800 MB) into
+`~/.paseo` on the volume; the image carries the `bzip2` their archives need.
+The voice conversation itself is a hidden Claude session on the same plan.
 
 **The SSH key is effectively required.** dotfiles' `claude-skills` module clones
 `agent-smith` during home-manager activation, and that clone is not fault
