@@ -293,7 +293,11 @@
       # it.
       paseoRun = pkgs.writeShellApplication {
         name = "agentfest-paseo";
-        runtimeInputs = with pkgs; [ coreutils curl nodejs ];
+        # bzip2 because Paseo's speech runtime unpacks its local models
+        # (Parakeet for dictation, Kokoro for voice) with `tar -xjf`, which
+        # execs bzip2 off PATH. Without it the ~800 MB download succeeds and the
+        # extraction fails with "tar exited with code 2", on every boot.
+        runtimeInputs = with pkgs; [ bzip2 coreutils curl nodejs ];
         text = ''
           log() { printf '[agentfest] %s\n' "$*"; }
 
