@@ -209,5 +209,7 @@ release tarball there and merely *also* available through brew.
 
 ## Status
 
-Running side by side with the last Codeman computer (`festie`, 0.1.39) while
-Paseo proves itself. `festie` goes once this one has carried the daily work.
+The only computer. The last Codeman one (`festie`, 0.1.39) carried the daily
+work until Paseo had for a week, and was retired on 5 Oct 2026; its home had
+been copied into this one first. The dotfiles profile keeps the name
+`hosts/festie`.
