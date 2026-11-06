@@ -146,13 +146,13 @@ relay can do is drop connections, observe timing, or replay a message you
 already sent (getpaseo/paseo#359). What stands in front of the machine is
 therefore the pairing link *and* the daemon password.
 
-**That second lock needs one patch today.** Upstream admits a relay client that
-sends no password at all — a stopgap kept until new mobile builds are in both
-stores (getpaseo/paseo#4087). Without the patch the pairing link alone is a
-full login. `paseoHarden` in `flake.nix` removes that branch at every start and
-then proves the result by calling the real function; if an upgrade reshapes the
-code so that proof fails, Paseo does not start. Delete it once upstream drops
-the stopgap.
+**That second lock is proven at every start.** Before 0.13.0, Paseo admitted a
+relay client that sent no password at all (getpaseo/paseo#4087), so the
+pairing link alone was a full login; 0.13.0 closed that (getpaseo/paseo#7668).
+`paseoHarden` in `flake.nix` still removes the exemption from an older pin, and
+on every start it proves the result by calling the real function: if an upgrade
+brings the exemption back, or reshapes the code so that proof fails, Paseo does
+not start.
 
 **The chart refuses to render without a password.** `paseo.password.existingSecret`
 is required, for the reason above.
