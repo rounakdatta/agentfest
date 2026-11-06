@@ -183,22 +183,23 @@
         EOF
       '';
 
-      # Closes the one gap in Paseo's relay authentication (getpaseo/paseo#4087).
+      # Makes relay clients present the daemon password (getpaseo/paseo#4087).
       #
       # The relay is end-to-end encrypted and never learns the daemon's key, so
-      # it cannot connect on its own. What it does not do yet is require the
-      # daemon password: a relay client that sends no password at all is let in
-      # as owner, a stopgap upstream keeps until new mobile builds reach both
-      # stores (`COMPAT(relayPasswordOptional)` in session-admission-auth).
-      # Until then the pairing link alone is a full login. Removing that one
-      # branch makes the link AND the password necessary; current apps already
-      # send the password inside the encrypted channel.
+      # it cannot connect on its own. Before 0.13.0 Paseo did not require the
+      # daemon password from it either: a relay client that sent no password at
+      # all was let in as owner (`COMPAT(relayPasswordOptional)` in
+      # session-admission-auth), so the pairing link alone was a full login.
+      # 0.13.0 removed that branch (getpaseo/paseo#7668), so from there on
+      # there is nothing to patch; on an older pin, removing it makes the link
+      # AND the password necessary.
       #
       # Fails closed. The result is proven by calling the real function, not by
       # trusting the text: if an upgrade reshapes the code so the patch no
-      # longer applies, the self-test fails and Paseo does not start. Once
-      # upstream drops the stopgap there is nothing to patch and the test still
-      # passes, so this can be deleted then.
+      # longer applies, or brings the exemption back, the self-test fails and
+      # Paseo does not start. That proof is why this stays after upstream's
+      # fix: it costs a fraction of a second per start, and it keeps a rollback
+      # to an older pin safe.
       paseoHarden = pkgs.writeText "agentfest-paseo-harden.mjs" ''
         import { readFileSync, writeFileSync } from "node:fs";
         import path from "node:path";
