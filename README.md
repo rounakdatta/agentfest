@@ -130,7 +130,10 @@ a public hostname — only the pairing link and the daemon password.
 
 3. On a fresh volume, open a terminal from the app and sign Claude Code in
    (`claude`, then `/login`). The home directory is new, so nothing is logged
-   in yet.
+   in yet. The other agents sign in the same way, once each:
+   `codex login --device-auth` (turn on device-code login in ChatGPT's security
+   settings first), `opencode auth login`, and `agy`, which prints a URL and
+   asks for the code it shows.
 
 Lost a phone? Delete `~/.paseo/daemon-keypair.json` and restart Paseo (see
 below); every device then has to pair again. That is the only revocation there
@@ -173,9 +176,9 @@ started by hand stay up. `kill` the `Paseo Supervisor` process to restart it.
 week and installs into the persistent volume, into its own prefix
 (`~/.paseo-app`) rather than the global npm one — which is also what makes the
 app's own update button refuse, so the pin is what runs. Upgrading is a
-`values.yaml` bump and a pod restart. Claude Code follows the same rule. Both
-are compared against the version actually installed, not a marker file, so an
-install that drifted is put back. Everything else follows the opposite rule: a
+`values.yaml` bump and a pod restart. Claude Code and Codex follow the same
+rule. All three are compared against the version actually installed, not a
+marker file, so an install that drifted is put back. Everything else follows the opposite rule: a
 new CLI means a PR against dotfiles and a new image.
 
 **Voice is opt-in** (`paseo.voice.enabled`). Paseo's local dictation and voice

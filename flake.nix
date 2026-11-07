@@ -87,6 +87,12 @@
       # persistent volume, so it survives restarts and stays updatable in place.
       defaultClaudeCodeVersion = "latest";
 
+      # Codex, for Paseo's Codex provider: from npm for the same reason, since
+      # its client version decides which models it offers. The npm package
+      # carries a static musl binary, so it needs none of the loader below.
+      # OpenCode and Antigravity are not on npm and come from dotfiles.
+      defaultCodexVersion = "latest";
+
       # Claude Code's npm package ships a prebuilt native binary (claude.exe)
       # whose ELF interpreter is the FHS path /lib64/ld-linux-x86-64.so.2. A
       # Nix-built image has no /lib64 at all, so exec fails with the famously
@@ -402,6 +408,7 @@
           HOME_DIR="''${HOME:-${homeDir}}"
           PASEO_VERSION="''${AGENTFEST_PASEO_VERSION:-${defaultPaseoVersion}}"
           CLAUDE_CODE_VERSION="''${AGENTFEST_CLAUDE_CODE_VERSION:-${defaultClaudeCodeVersion}}"
+          CODEX_VERSION="''${AGENTFEST_CODEX_VERSION:-${defaultCodexVersion}}"
           ACTIVATION="''${AGENTFEST_HOME_ACTIVATION:-${homeActivation}}"
 
           log() { printf '[agentfest] %s\n' "$*"; }
@@ -630,6 +637,8 @@
 
           ensure_npm_pkg @anthropic-ai/claude-code "$CLAUDE_CODE_VERSION" \
             "$NPM_CONFIG_PREFIX/lib/node_modules/@anthropic-ai/claude-code/package.json" -g
+          ensure_npm_pkg @openai/codex "$CODEX_VERSION" \
+            "$NPM_CONFIG_PREFIX/lib/node_modules/@openai/codex/package.json" -g
 
           # --- 4a. Paseo ----------------------------------------------------
           # Into its own prefix, not the global one; basePath explains why.
@@ -825,6 +834,7 @@
               "AGENTFEST_HOME_ACTIVATION=${homeActivation}"
               "AGENTFEST_PASEO_VERSION=${defaultPaseoVersion}"
               "AGENTFEST_CLAUDE_CODE_VERSION=${defaultClaudeCodeVersion}"
+              "AGENTFEST_CODEX_VERSION=${defaultCodexVersion}"
 
               # Loopback unless the chart says otherwise: the relay dials out,
               # so the daemon needs no reachable listener to be usable.
