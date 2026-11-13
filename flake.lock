@@ -46,11 +46,11 @@
         "nixpkgs": "nixpkgs_5"
       },
       "locked": {
-        "lastModified": 1794307619,
-        "narHash": "sha256-4whgh9NNlxXWjwFTYiJTGSYvXHSJ2U2aIgWlWaKYVu8=",
+        "lastModified": 1794576046,
+        "narHash": "sha256-E0fkqucBbqg8CILUP4Y6/oqgNnjuoHjp7jhsD7747Ag=",
         "owner": "rounakdatta",
         "repo": "dotfiles",
-        "rev": "29d5c5d6fa7ddbb4d842a29d8f6f49a518a56d5d",
+        "rev": "22aae9421b345bdabc64c69f151154fde8ea22eb",
         "type": "github"
       },
       "original": {
